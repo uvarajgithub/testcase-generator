@@ -32,7 +32,7 @@ export const api = {
   generations: () => request<{ generations: Generation[] }>("/api/generations"),
   templates: () => request<{ templates: Array<{ id: string; name: string; platform: string; selectedTypes: string[]; instructions: string }> }>("/api/templates"),
   settings: () => request<{ settings: Record<string, unknown>; aiConfigured: boolean }>("/api/settings"),
-  exportExcel: async (generationId: string, config?: { areaPath?: string; assignedTo?: string; state?: string; testType?: string }) => {
+  exportExcel: async (generationId: string, config?: { areaPath?: string; assignedTo?: string; state?: string }) => {
     const response = await fetch(`/api/generations/${generationId}/export`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(config ?? {}) });
     if (!response.ok) throw new Error("Excel export failed.");
     const blob = await response.blob();

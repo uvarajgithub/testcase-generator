@@ -26,7 +26,7 @@ const uiPatterns: Array<[string, string]> = [
 ];
 
 export function parseAcceptanceCriteria(text: string): AcceptanceCriterion[] {
-  const normalized = text.replace(/\r\n/g, "\n").trim();
+  const normalized = normalizeRequirementText(text).replace(/\r\n/g, "\n").trim();
   const lines = normalized
     .split(/\n+/)
     .map((line) => line.replace(/^\s*(?:[-*]|\d+[.)])\s*/, "").trim())
@@ -34,19 +34,21 @@ export function parseAcceptanceCriteria(text: string): AcceptanceCriterion[] {
   const gwtBlocks = normalized.match(/given[\s\S]*?(?=(?:\n\s*given\b)|$)/gi) ?? [];
   const candidates = gwtBlocks.length > 1 ? gwtBlocks.map((b) => b.trim()) : lines.length > 1 ? lines : [normalized].filter(Boolean);
 
-  return candidates.map((criterion, index) => {
+  return candidates.map((rawCriterion, index) => {
+    const providedId = rawCriterion.match(/^\s*((?:AC|REQ|US|BR)-?\d{1,4})\s*[:.)-]\s*(.+)$/i);
+    const criterion = providedId ? providedId[2].trim() : rawCriterion;
     const lower = criterion.toLowerCase();
     const parts = criterionParts(criterion);
     const actor = parts.actor || (lower.includes("admin") ? "Admin" : lower.includes("customer") ? "Customer" : "User");
     const inputs = inputTerms(criterion);
     const dependencies = Array.from(new Set((criterion.match(/\b(api|payment|database|email service|gateway|third-party|integration)\b/gi) ?? []).map((v) => v.toLowerCase())));
     const validations = Array.from(new Set((criterion.match(/\b(required|valid|invalid|min(?:imum)?|max(?:imum)?|unique|duplicate|format|authorized|permission)\b/gi) ?? []).map((v) => v.toLowerCase())));
-    const outcomes = parts.outcome ? [parts.outcome] : lower.includes("then") ? [criterion.split(/then/i).pop()?.trim() ?? "Expected outcome is satisfied"] : ["Expected outcome is satisfied"];
-    const action = parts.action || normalizeAction(criterion.match(/\b(?:can|should|must|when)\s+([^.,;]+)/i)?.[1]?.replace(/\bthen\b[\s\S]*$/i, "") ?? "") || "complete the described behavior";
+    const outcomes = parts.outcome ? [parts.outcome] : lower.includes("then") ? [criterion.split(/then/i).pop()?.trim() ?? "The described result is visible to the tester."] : [inferOutcome(criterion)];
+    const action = parts.action || normalizeAction(criterion.match(/\b(?:can|should|must|want to|when)\s+([^.,;]+)/i)?.[1]?.replace(/\bthen\b[\s\S]*$/i, "") ?? "") || inferAction(criterion);
     const assumptions = criterion.length < 18 ? ["Acceptance criterion is brief; generation uses standard QA assumptions."] : [];
     const warnings = lower.includes("etc") || lower.includes("as needed") ? ["Criterion contains open-ended wording that may need clarification."] : [];
     return {
-      id: `AC-${String(index + 1).padStart(3, "0")}`,
+      id: providedId ? normalizeCriterionId(providedId[1]) : `AC-${String(index + 1).padStart(3, "0")}`,
       text: criterion,
       actor,
       action,
@@ -106,6 +108,37 @@ function cleanPhrase(value: string) {
   return value.replace(/\s+/g, " ").replace(/[.;]+$/g, "").trim();
 }
 
+export function normalizeRequirementText(value: string) {
+  return value
+    .replace(/\bdashbaord\b/gi, "dashboard")
+    .replace(/\blogin\b/gi, "log in")
+    .replace(/\bi\b/g, "I")
+    .replace(/\bas a user i want to\b/gi, "As a user, I want to")
+    .replace(/[^\S\r\n]+/g, " ")
+    .replace(/\s+([.,;:])/g, "$1")
+    .trim();
+}
+
+function normalizeCriterionId(value: string) {
+  const match = value.match(/^([A-Z]+)-?(\d+)$/i);
+  return match ? `${match[1].toUpperCase()}-${match[2].padStart(3, "0")}` : value.toUpperCase();
+}
+
+function inferAction(criterion: string) {
+  if (isLoginText(criterion)) return "log in to the dashboard";
+  return cleanPhrase(criterion).replace(/^as a\s+[^,]+,\s*i want to\s+/i, "");
+}
+
+function inferOutcome(criterion: string) {
+  if (isLoginText(criterion)) return "The user is authenticated and redirected to the dashboard.";
+  return "The application displays the requested result described by the requirement.";
+}
+
+function isLoginText(value: string) {
+  const lower = value.toLowerCase();
+  return /\blog ?in|login|authentication|credential/.test(lower);
+}
+
 function titleCase(value: string) {
   return value.slice(0, 1).toUpperCase() + value.slice(1).toLowerCase();
 }
@@ -158,7 +191,14 @@ const prefixes: Record<TestCase["type"], string> = {
   Integration: "INT"
 };
 
+function typePrefix(type: TestCase["type"]) {
+  return prefixes[type] ?? "TC";
+}
+
 export function generateCases(generation: Pick<Generation, "requirement" | "criteria" | "detectedElements" | "config">): TestCase[] {
+  if (isLoginText(`${generation.requirement.requirementTitle} ${generation.requirement.acceptanceCriteria} ${generation.requirement.featureName}`)) {
+    return loginCases(generation).slice(0, generation.config.maxCases);
+  }
   const counts: Partial<Record<TestCase["type"], number>> = {};
   const cases: TestCase[] = [];
   const selected = generation.config.selectedTypes;
@@ -176,6 +216,197 @@ export function generateCases(generation: Pick<Generation, "requirement" | "crit
     }
   }
   return removeDuplicates(cases);
+}
+
+function loginCases(generation: Pick<Generation, "requirement" | "criteria" | "detectedElements" | "config">): TestCase[] {
+  const criterion = generation.criteria[0] ?? parseAcceptanceCriteria(generation.requirement.acceptanceCriteria)[0];
+  const acId = criterion?.id ?? "AC-001";
+  const base = {
+    requirementId: generation.requirement.requirementId,
+    acceptanceCriteriaId: acId,
+    module: generation.requirement.moduleName,
+    feature: "Login",
+    scenario: criterion?.text ?? generation.requirement.acceptanceCriteria,
+    objective: "Verify login access, validation, edge handling, and credential security.",
+    preconditions: generation.requirement.preconditions || "A registered user account exists and the application login page is reachable.",
+    postconditions: "Authentication state, validation messages, and security controls remain consistent after execution.",
+    severity: "High" as const,
+    automationCandidate: "Yes" as const,
+    automationNotes: "Automate with stable selectors for Username, Password, Login, validation messages, and dashboard navigation.",
+    screenshotReference: generation.detectedElements[0]?.screenshotName ?? "",
+    detectedUIElement: "Login page: Username field, Password field, Login button, dashboard destination",
+    assumptions: "Standard login controls are inferred from the requirement.",
+    executionStatus: "Not Run" as const,
+    actualResult: "",
+    defectId: "",
+    testerComments: "",
+    inferred: true
+  };
+  const cases: Array<Pick<TestCase, "type" | "title" | "testData" | "steps" | "expectedResult" | "priority" | "tags">> = [
+    {
+      type: "Positive",
+      title: "Verify a registered user can successfully log in and access the dashboard using valid credentials",
+      testData: "Registered username and corresponding valid password.",
+      steps: ["Open the application login page.", "Enter a valid registered username in the Username field.", "Enter the corresponding valid password in the Password field.", "Click the Login button.", "Review the dashboard after authentication."],
+      expectedResult: "The dashboard opens and displays authorised navigation options for the authenticated user.",
+      priority: "High",
+      tags: ["login", "positive", acId]
+    },
+    {
+      type: "Positive",
+      title: "Verify the authenticated user is redirected to the dashboard and sees authorised navigation options",
+      testData: "Registered username and valid password for a user with dashboard access.",
+      steps: ["Open the application login page.", "Enter a registered email address in the Username field.", "Enter the corresponding valid password in the Password field.", "Click the Login button.", "Review the destination URL, dashboard page heading, and authorised navigation menu."],
+      expectedResult: "The user is redirected to the dashboard and only authorised navigation options are displayed.",
+      priority: "High",
+      tags: ["login", "positive", "redirect", acId]
+    },
+    {
+      type: "Negative",
+      title: "Verify the system prevents login and displays an error when an invalid username is entered",
+      testData: "Invalid username with a valid password format.",
+      steps: ["Open the application login page.", "Enter an invalid username in the Username field.", "Enter any valid-format password in the Password field.", "Click the Login button."],
+      expectedResult: "Login is rejected, a clear invalid-credentials error message is displayed, and the user remains on the login page.",
+      priority: "High",
+      tags: ["login", "negative", "invalid-username", acId]
+    },
+    {
+      type: "Negative",
+      title: "Verify the system prevents login and displays an error when a registered user enters an invalid password",
+      testData: "Valid registered username with an incorrect password.",
+      steps: ["Open the application login page.", "Enter a valid registered username in the Username field.", "Enter a password that does not match the registered account in the Password field.", "Click the Login button.", "Review the login error message and authentication state."],
+      expectedResult: "Login is rejected, a clear invalid-credentials error message is displayed, and the user remains on the login page.",
+      priority: "High",
+      tags: ["login", "negative", "invalid-password", acId]
+    },
+    {
+      type: "Negative",
+      title: "Verify the system prevents login when both username and password are invalid",
+      testData: "Invalid username and invalid password.",
+      steps: ["Open the application login page.", "Enter an unregistered username in the Username field.", "Enter a password that does not match any registered account in the Password field.", "Click the Login button.", "Review the login page error response and session state."],
+      expectedResult: "Login is rejected without authenticating the user or opening the dashboard.",
+      priority: "High",
+      tags: ["login", "negative", "invalid-credentials", acId]
+    },
+    {
+      type: "Validation",
+      title: "Verify the Username field displays a required validation message when the user attempts to log in without entering a username",
+      testData: "Empty Username field and a valid password.",
+      steps: ["Open the application login page.", "Leave the Username field empty.", "Enter a valid password in the Password field.", "Click the Login button."],
+      expectedResult: "A required-field validation message is displayed for Username and the login request is not submitted.",
+      priority: "High",
+      tags: ["login", "validation", "username-required", acId]
+    },
+    {
+      type: "Validation",
+      title: "Verify the Password field displays a required validation message when the user attempts to log in without entering a password",
+      testData: "Valid username and empty Password field.",
+      steps: ["Open the application login page.", "Enter a valid registered username in the Username field.", "Leave the Password field empty.", "Click the Login button."],
+      expectedResult: "A required-field validation message is displayed for Password and the login request is not submitted.",
+      priority: "High",
+      tags: ["login", "validation", "password-required", acId]
+    },
+    {
+      type: "Validation",
+      title: "Verify the login form prevents submission when both mandatory credential fields are empty",
+      testData: "Empty Username and Password fields.",
+      steps: ["Open the application login page.", "Leave the Username field empty.", "Leave the Password field empty.", "Click the Login button."],
+      expectedResult: "Required-field validation messages are displayed for Username and Password and the user remains on the login page.",
+      priority: "High",
+      tags: ["login", "validation", "empty-form", acId]
+    },
+    {
+      type: "Edge",
+      title: "Verify the Username field handles the minimum supported character length during login",
+      testData: "Username at the minimum supported length with a valid password.",
+      steps: ["Open the application login page.", "Enter a username at the minimum supported length in the Username field.", "Enter the corresponding valid password in the Password field.", "Click the Login button.", "Review the Username field boundary validation state."],
+      expectedResult: "The username boundary is validated according to configured rules and no unrelated field errors are displayed.",
+      priority: "Medium",
+      tags: ["login", "edge", "minimum-length", acId]
+    },
+    {
+      type: "Edge",
+      title: "Verify the Username field handles the maximum supported character length during login",
+      testData: "Username at the maximum supported length with a valid password.",
+      steps: ["Open the application login page.", "Enter a username at the maximum supported length in the Username field.", "Verify the Username field displays the complete maximum-length value.", "Enter one additional character in the Username field.", "Review whether the extra character is blocked or a validation message is displayed."],
+      expectedResult: "The username boundary is validated without truncation, layout breakage, or loss of entered characters.",
+      priority: "Medium",
+      tags: ["login", "edge", "maximum-length", acId]
+    },
+    {
+      type: "Edge",
+      title: "Verify leading and trailing spaces in login credentials are handled correctly during login",
+      testData: "Username and password values with leading and trailing spaces.",
+      steps: ["Open the application login page.", "Enter a registered username with leading and trailing spaces.", "Enter the corresponding password with leading or trailing spaces.", "Click the Login button."],
+      expectedResult: "Credential spacing is handled according to configured validation rules and the result is clearly displayed.",
+      priority: "Medium",
+      tags: ["login", "edge", "whitespace", acId]
+    },
+    {
+      type: "Edge",
+      title: "Verify special characters in login credentials are processed according to configured validation rules",
+      testData: "Credential values containing supported and unsupported special characters.",
+      steps: ["Open the application login page.", "Enter special characters in the Username field.", "Enter special characters in the Password field.", "Click the Login button."],
+      expectedResult: "The application accepts supported characters or displays clear validation for unsupported characters.",
+      priority: "Medium",
+      tags: ["login", "edge", "special-characters", acId]
+    },
+    {
+      type: "Security",
+      title: "Verify the Password field masks all entered characters during login",
+      testData: "Any password value entered in the Password field.",
+      steps: ["Open the application login page.", "Enter characters in the Password field.", "Review how the entered password is displayed.", "Move focus away from the Password field."],
+      expectedResult: "Password characters are masked while entered and are not displayed as readable text.",
+      priority: "High",
+      tags: ["login", "security", "password-masking", acId]
+    },
+    {
+      type: "Security",
+      title: "Verify the login form safely rejects SQL injection text entered in the credential fields",
+      testData: "SQL injection-style text in Username and Password fields.",
+      steps: ["Open the application login page.", "Enter SQL injection-style text in the Username field.", "Enter SQL injection-style text in the Password field.", "Click the Login button."],
+      expectedResult: "The input is rejected safely, no internal error details are displayed, and the user remains unauthenticated.",
+      priority: "High",
+      tags: ["login", "security", "injection", acId]
+    },
+    {
+      type: "Security",
+      title: "Verify multiple consecutive unsuccessful login attempts are handled securely",
+      testData: "A registered username with repeated invalid passwords.",
+      steps: ["Open the application login page.", "Enter a registered username in the Username field.", "Enter a password that does not match the registered account in the Password field.", "Click the Login button repeatedly until the configured failed-attempt threshold is reached.", "Review the login message and account access state."],
+      expectedResult: "Repeated failed attempts are handled securely without exposing whether the username exists.",
+      priority: "High",
+      tags: ["login", "security", "failed-attempts", acId]
+    },
+    {
+      type: "Security",
+      title: "Verify an unauthenticated user cannot directly access the dashboard URL",
+      testData: "Dashboard URL opened without an authenticated session.",
+      steps: ["Start a browser session with no authenticated user.", "Open the dashboard URL directly.", "Review the displayed page and navigation state."],
+      expectedResult: "The unauthenticated user is denied dashboard access and is redirected to the login page or shown an access-denied message.",
+      priority: "High",
+      tags: ["login", "security", "direct-url", acId]
+    },
+    {
+      type: "Accessibility",
+      title: "Verify the login form supports keyboard navigation in the correct tab order",
+      testData: "Keyboard-only interaction.",
+      steps: ["Open the application login page.", "Navigate through Username, Password, Login, and related links using Tab and Shift+Tab.", "Activate the Login button using the keyboard."],
+      expectedResult: "Keyboard focus follows a logical order and the active control has a visible focus indicator.",
+      priority: "Medium",
+      tags: ["login", "accessibility", "keyboard", acId]
+    }
+  ];
+  const selected = new Set([...generation.config.selectedTypes, "Validation", "Security"]);
+  return cases
+    .filter((item) => selected.has(item.type))
+    .map((item, index) => ({
+      ...base,
+      ...item,
+      id: `${typePrefix(item.type)}-${String(index + 1).padStart(3, "0")}`,
+      severity: item.priority,
+      tags: item.tags
+    }));
 }
 
 type CaseVariant = {
@@ -196,7 +427,7 @@ function variantsFor(type: TestCase["type"], criterion: AcceptanceCriterion, pla
         name: "happy-path",
         title: `${sentenceCase(criterion.action)} with valid ${primaryData}`,
         data: `Valid ${data}`,
-        steps: ["Open the feature under test.", `Enter valid values for ${primaryData}.`, "Submit or continue the flow.", "Review the final confirmation, status, or saved record."],
+        steps: ["Open the feature under test.", `Enter valid ${primaryData} in the relevant field.`, "Use the primary submit or continue control.", "Review the visible confirmation, status, or saved record."],
         expected: criterion.outcomes[0] || "The user completes the flow successfully and the expected state is visible.",
         tags: ["happy-path", "valid-data"]
       },
@@ -204,7 +435,7 @@ function variantsFor(type: TestCase["type"], criterion: AcceptanceCriterion, pla
         name: "optional-data",
         title: `${sentenceCase(criterion.action)} with only mandatory ${primaryData}`,
         data: `Mandatory ${data} only`,
-        steps: ["Open the feature under test.", "Complete only the mandatory fields required by the acceptance criterion.", "Submit or continue the flow.", "Review whether optional omissions are handled correctly."],
+        steps: ["Open the feature under test.", "Complete only the mandatory fields described by the acceptance criterion.", "Use the primary submit or continue control.", "Review whether optional omissions are accepted without extra validation."],
         expected: "The system completes the flow using mandatory data only and does not require optional information.",
         tags: ["mandatory-only"]
       },
@@ -268,7 +499,7 @@ function variantsFor(type: TestCase["type"], criterion: AcceptanceCriterion, pla
         name: "minimum-boundary",
         title: `Handle minimum boundary for ${data}`,
         data: `Minimum accepted ${data}`,
-        steps: ["Open the feature under test.", `Enter the minimum accepted value for ${data}.`, "Submit or continue.", "Review the resulting state."],
+        steps: ["Open the feature under test.", `Enter the minimum accepted value for ${data}.`, "Use the primary submit or continue control.", "Review the visible state after the boundary value is processed."],
         expected: "The system accepts the minimum valid boundary and produces the same measurable outcome as the acceptance criterion.",
         tags: ["minimum", "boundary"]
       },
@@ -276,7 +507,7 @@ function variantsFor(type: TestCase["type"], criterion: AcceptanceCriterion, pla
         name: "maximum-boundary",
         title: `Handle maximum boundary for ${data}`,
         data: `Maximum accepted ${data}`,
-        steps: ["Open the feature under test.", `Enter the maximum accepted value for ${data}.`, "Submit or continue.", "Review the resulting state and layout."],
+        steps: ["Open the feature under test.", `Enter the maximum accepted value for ${data}.`, "Use the primary submit or continue control.", "Review the visible state and layout after the boundary value is processed."],
         expected: "The system accepts the maximum valid boundary without truncation, layout breakage, or data loss.",
         tags: ["maximum", "boundary"]
       },
@@ -312,7 +543,7 @@ function variantsFor(type: TestCase["type"], criterion: AcceptanceCriterion, pla
         name: "inline-error-clearance",
         title: `Clear validation messages after correcting ${data}`,
         data: `Invalid then corrected ${data}`,
-        steps: ["Open the feature under test.", `Enter invalid values for ${data} and trigger validation.`, "Correct the values using valid test data.", "Submit or continue the flow."],
+        steps: ["Open the feature under test.", `Enter invalid values for ${data} and trigger validation.`, "Correct the values using valid test data.", "Use the primary submit or continue control."],
         expected: "Validation messages clear after correction, and the system allows progress only with valid values.",
         tags: ["validation", "error-clearance"]
       },
@@ -477,7 +708,7 @@ function variantsFor(type: TestCase["type"], criterion: AcceptanceCriterion, pla
 }
 
 function buildCase(generation: Pick<Generation, "requirement" | "config">, criterion: AcceptanceCriterion, type: TestCase["type"], number: number, element?: DetectedElement, variant?: CaseVariant): TestCase {
-  const prefix = prefixes[type];
+  const prefix = typePrefix(type);
   const data = criterion.inputs.length ? criterion.inputs.join(", ") : generation.requirement.featureName;
   const titleByType: Record<TestCase["type"], string> = {
     Positive: `Verify ${criterion.action}`,
@@ -491,7 +722,7 @@ function buildCase(generation: Pick<Generation, "requirement" | "config">, crite
     Integration: `Verify dependency behavior for ${criterion.dependencies.join(", ")}`
   };
   const stepsByType: Record<TestCase["type"], string[]> = {
-    Positive: [`Open ${generation.requirement.moduleName} > ${generation.requirement.featureName}.`, `Complete the flow using valid ${data}.`, "Submit or save the change.", "Review the resulting state."],
+    Positive: [`Open ${generation.requirement.moduleName} > ${generation.requirement.featureName}.`, `Enter valid ${data} in the required fields.`, "Submit or save the change.", `Review the visible ${generation.requirement.featureName} state after submission.`],
     Negative: [`Open ${generation.requirement.featureName}.`, `Enter invalid, empty, or unauthorized ${data}.`, "Attempt to continue.", "Review validation and recovery guidance."],
     Edge: [`Open ${generation.requirement.featureName}.`, `Enter minimum, maximum, duplicate, special-character, or interrupted values for ${data}.`, "Complete the action.", "Review state consistency after the edge condition."],
     Validation: [`Focus each relevant field for ${criterion.id}.`, "Leave required values empty and then enter malformed values.", "Correct the values.", "Confirm validation clears only when rules are satisfied."],
@@ -508,15 +739,15 @@ function buildCase(generation: Pick<Generation, "requirement" | "config">, crite
     module: generation.requirement.moduleName,
     feature: generation.requirement.featureName,
     scenario: criterion.text,
-    title: variant?.title || titleByType[type],
+    title: professionalTitle(generation.requirement.featureName, criterion, type, variant?.title || titleByType[type]),
     type,
     objective: `Prove that ${criterion.text}`,
     preconditions: generation.requirement.preconditions || "User can access the feature under test.",
     testData: generation.config.includeTestData ? (variant?.data || testDataFor(type, data)) : "",
-        steps: enhanceSteps(variant?.steps.length ? variant.steps : stepsByType[type], generation, criterion, data),
-    expectedResult: generation.config.includeExpectedResults ? (variant?.expected || expectedFor(type, criterion)) : "",
+    steps: enhanceSteps(variant?.steps.length ? variant.steps : stepsByType[type], generation, criterion, data),
+    expectedResult: generation.config.includeExpectedResults ? professionalExpected(generation.requirement.featureName, type, variant?.expected || expectedFor(type, criterion)) : "",
     postconditions: generation.config.includePostconditions ? "System state remains consistent and traceable after execution." : "",
-    priority: generation.requirement.priority,
+    priority: priorityFor(generation.requirement, type),
     severity: type === "Security" ? "Critical" : generation.requirement.priority,
     automationCandidate: ["Positive", "Negative", "Validation", "Security", "Integration"].includes(type) ? "Yes" : type === "Accessibility" ? "Partial" : "Partial",
     automationNotes: generation.config.includeAutomationCandidates ? "Candidate should be automated after selectors and stable data are confirmed." : "",
@@ -534,22 +765,125 @@ function buildCase(generation: Pick<Generation, "requirement" | "config">, crite
 
 function enhanceSteps(steps: string[], generation: Pick<Generation, "requirement">, criterion: AcceptanceCriterion, data: string) {
   const location = `${generation.requirement.moduleName} > ${generation.requirement.featureName}`;
+  const feature = generation.requirement.featureName;
+  const primaryField = fieldName(data, feature);
   return steps.map((step) => step
     .replace(/^Open the feature under test\.$/i, `Open ${location}.`)
     .replace(/^Open the feature under test\./i, `Open ${location}.`)
     .replace(/^Open the feature\.$/i, `Open ${location}.`)
-    .replace(/^Complete the acceptance-criterion flow with valid data\.$/i, `Perform "${criterion.action}" in ${generation.requirement.featureName} using valid ${data}.`)
-    .replace(/^Start the user flow with otherwise valid data\.$/i, `Start "${criterion.action}" in ${generation.requirement.featureName} with otherwise valid ${data}.`)
-    .replace(/^Submit or continue the flow\.$/i, `Submit or continue the ${generation.requirement.featureName} flow.`)
-    .replace(/^Attempt to submit or continue\.$/i, `Attempt to submit or continue the ${generation.requirement.featureName} flow.`)
-    .replace(/^Review the final confirmation, status, or saved record\.$/i, `Review the final confirmation, status, or saved ${generation.requirement.featureName} record.`)
+    .replace(/^Enter valid (.+) in the relevant field\.$/i, `Enter a valid ${primaryField} value such as Sample ${primaryField} in the ${primaryField} field.`)
+    .replace(/^Complete only the mandatory fields described by the acceptance criterion\.$/i, `Enter values only in the mandatory ${feature} fields identified by ${criterion.id}.`)
+    .replace(/^Complete the acceptance-criterion flow with valid data\.$/i, `Enter valid ${data} in the ${feature} form fields required for "${criterion.action}".`)
+    .replace(/^Start the user flow with otherwise valid data\.$/i, `Start the ${feature} form with valid ${data} before applying the interruption condition.`)
+    .replace(/^Use the primary submit or continue control\.$/i, `Click the primary Submit or Continue button on the ${feature} form.`)
+    .replace(/^Attempt to submit or continue\.$/i, `Click the primary Submit or Continue button on the ${feature} form.`)
+    .replace(/^Submit the flow again\.$/i, `Click the primary Submit button on the ${feature} form again.`)
+    .replace(/^Observe system handling\.$/i, `Review the ${feature} page validation message and saved-record state.`)
+    .replace(/^Review whether optional omissions are accepted without extra validation\.$/i, `Review the ${feature} confirmation message and verify omitted optional fields are not flagged.`)
+    .replace(/^Review the visible confirmation, status, or saved record\.$/i, `Review the visible ${feature} confirmation message, status, or saved record.`)
+    .replace(/^Review validation and recovery guidance\.$/i, `Review the ${feature} field validation message and correction guidance.`)
+    .replace(/^Review validation and saved state\.$/i, `Review the ${feature} validation message and verify no record is saved.`)
+    .replace(/^Review the visible state after the boundary value is processed\.$/i, `Review the ${primaryField} field boundary message and the ${feature} form state.`)
+    .replace(/^Review the visible state and layout after the boundary value is processed\.$/i, `Review the ${primaryField} field value, boundary message, and ${feature} page layout.`)
+    .replace(/^Review final state and duplicate handling\.$/i, `Review the ${feature} confirmation, duplicate-prevention message, and saved-record state.`)
+    .replace(/^Focus each relevant field for (.+)\.$/i, `Focus the ${primaryField} field and each mandatory ${feature} field for $1.`)
+    .replace(/^Leave required values empty and then enter malformed values\.$/i, `Leave the ${primaryField} field empty, then enter malformed ${primaryField} data in that field.`)
+    .replace(/^Correct the values\.$/i, `Replace the malformed ${primaryField} value with a valid ${primaryField} value.`)
+    .replace(/^Confirm validation clears only when rules are satisfied\.$/i, `Review that the ${primaryField} validation message clears only after the field value satisfies the rule.`)
+    .replace(/^Enter individually valid values that conflict when combined\.$/i, `Enter individually valid but conflicting values in the dependent ${feature} fields.`)
+    .replace(/^Navigate away from the feature or refresh the view\.$/i, `Use the browser Refresh control or ${feature} navigation link to leave the current record view.`)
+    .replace(/^Return to the feature or related record\.$/i, `Open the ${feature} page and return to the related saved record.`)
+    .replace(/^Review the persisted values and visible status\.$/i, `Review the saved ${feature} record values and visible status message.`)
+    .replace(/^Leave (.+) empty\.$/i, `Leave the ${fieldName("$1", feature)} field empty on the ${feature} form.`)
+    .replace(/^Leave the required data field empty on (.+)\.$/i, `Leave the mandatory ${feature} field empty on $1.`)
+    .replace(/^Submit the request with required data omitted or null\.$/i, `Submit the ${feature} request with the mandatory ${feature} field omitted or null.`)
+    .replace(/^Interrupt the flow before completion or simulate a retry condition\.$/i, `Interrupt the ${feature} submission before completion or trigger the retry condition for the Submit button.`)
+    .replace(/^Resume or retry the action\.$/i, `Click the Retry or Submit button on the ${feature} form after the interruption.`)
+    .replace(/^Review whether any record or state change was created\.$/i, `Review the ${feature} record list and verify no new record or state change was created.`)
+    .replace(/^Review the validation message and saved state\.$/i, `Review the ${feature} validation message and verify no record is saved.`)
+    .replace(/^Create or identify an existing valid record\.$/i, `Open an existing valid ${feature} record to use as duplicate test data.`)
+    .replace(/^Enter duplicate (.+)\.$/i, `Enter duplicate $1 in the matching ${feature} form field.`)
+    .replace(/^Sign in or act as a user without the required permission\.$/i, `Sign in as a user role that does not have permission for ${feature}.`)
+    .replace(/^Open the protected feature or action\.$/i, `Open the protected ${feature} page URL or action link.`)
+    .replace(/^Attempt to complete the action\.$/i, `Click the primary protected action button on the ${feature} page.`)
+    .replace(/^Attempt the protected action\.$/i, `Click the primary protected action button on the ${feature} page.`)
+    .replace(/^Review the response and visible messaging\.$/i, `Review the ${feature} authorization response message and visible page state.`)
+    .replace(/^Inspect visible and network responses\.$/i, `Inspect the ${feature} authorization message and the blocked network response status.`)
+    .replace(/^Inspect the error response and visible messaging\.$/i, `Inspect the ${feature} error message and blocked network response status.`)
+    .replace(/^Confirm sensitive data is not disclosed\.$/i, `Review the ${feature} page and response details for hidden protected data, internal identifiers, and secrets.`)
+    .replace(/^Confirm user guidance remains actionable\.$/i, `Review the ${feature} error message text and the available correction button or link.`)
+    .replace(/^Inspect visible labels, buttons, fields, links, tables, statuses, and required indicators\.$/i, `Inspect the visible labels, buttons, fields, links, tables, statuses, and required indicators on ${feature}.`)
+    .replace(/^Trigger an error or validation state\.$/i, `Trigger an error or validation state in the ${feature} form.`)
+    .replace(/^Use primary navigation into the flow\.$/i, `Use the primary ${feature} navigation link or menu item to open the form.`)
+    .replace(/^Use cancel, back, close, or return controls where available\.$/i, `Use the Cancel, Back, Close, or Return control on the ${feature} page where available.`)
+    .replace(/^Complete or attempt the user flow without pointer input\.$/i, `Attempt the ${feature} form using only keyboard controls.`)
+    .replace(/^Access the feature without the required authorization\.$/i, `Open the ${feature} page URL without the required authorization.`)
+    .replace(/^Complete the flow until submission is possible\.$/i, `Complete the ${feature} form fields until the Submit button is enabled.`)
+    .replace(/^Start the feature flow with partially entered valid data\.$/i, `Enter partial valid data in the ${feature} form fields before resizing the viewport.`)
+    .replace(/^Start the user flow with valid data\.$/i, `Enter valid data in the ${feature} form fields before triggering the dependency condition.`)
+    .replace(/^Run the user flow through the integration point\.$/i, `Click the ${feature} Submit button to call the configured integration point.`)
   );
 }
 
+function fieldName(data: string, feature: string) {
+  const source = data.split(",")[0]?.trim() || feature;
+  if (/\bemail\b/i.test(source)) return "Email";
+  if (/\bpassword\b/i.test(source)) return "Password";
+  if (/\bamount\b/i.test(source)) return "Amount";
+  if (/\bdate\b/i.test(source)) return "Date";
+  if (/\bstatus\b/i.test(source)) return "Status";
+  if (/\baccount\b/i.test(source)) return "Account details";
+  return sentenceCase(source.replace(/\bdata\b/i, "value"));
+}
+
+function professionalTitle(feature: string, criterion: AcceptanceCriterion, type: TestCase["type"], draft: string) {
+  const cleaned = cleanPhrase(draft)
+    .replace(/^\s*(?:POS|NEG|EDGE|VAL|TC|SEC|UI|A11Y|RESP|INT)-\d+\s*:\s*/i, "")
+    .replace(/\bfunctionality\b|\bscenario\b|\bworks correctly\b|\bexpected result\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (/^Verify\b/i.test(cleaned) && cleaned.toLowerCase().includes(feature.toLowerCase())) return sentenceCase(cleaned);
+  const condition = titleCondition(type, cleaned || criterion.action);
+  const specific = cleaned ? ` for ${cleaned.toLowerCase()}` : "";
+  return `Verify ${feature} ${condition}${specific} when the user ${criterion.action}`;
+}
+
+function titleCondition(type: TestCase["type"], source: string) {
+  if (type === "Positive") return "produces the required result";
+  if (type === "Negative") return "rejects invalid input";
+  if (type === "Validation") return "displays clear validation";
+  if (type === "Edge") return "handles boundary input";
+  if (type === "Security") return "prevents unsafe access or input";
+  if (type === "Accessibility") return "supports accessible operation";
+  if (type === "Responsive") return "remains usable across supported viewports";
+  if (type === "Integration") return "handles dependency responses";
+  return `shows the required ${source.toLowerCase()}`;
+}
+
+function professionalExpected(feature: string, type: TestCase["type"], expected: string) {
+  const cleaned = cleanPhrase(expected)
+    .replace(/The expected outcome is completed and visible to the user\./i, "")
+    .trim();
+  if (cleaned && cleaned.split(/\s+/).length >= 6) return sentenceCase(cleaned);
+  if (cleaned) return `${feature} displays a confirmation message and the saved record reflects: ${cleaned}.`;
+  if (type === "Negative") return `${feature} rejects the invalid action, displays a clear message, and does not save an unintended change.`;
+  if (type === "Validation") return `${feature} displays field-level validation and blocks submission until the data is corrected.`;
+  return `${feature} displays the requested result and any saved data is visible to the tester.`;
+}
+
+function priorityFor(requirement: RequirementInput, type: TestCase["type"]): TestCase["priority"] {
+  const source = `${requirement.requirementTitle} ${requirement.featureName} ${requirement.acceptanceCriteria}`.toLowerCase();
+  if (/\blog ?in|authentication|payment|checkout|order submission|data saving|registration|security|data-loss/.test(source)) return "High";
+  if (["Validation", "Negative", "Accessibility", "UI"].includes(type)) return "Medium";
+  if (type === "Responsive") return "Low";
+  return requirement.priority === "Critical" ? "High" : requirement.priority;
+}
+
 function testDataFor(type: TestCase["type"], data: string) {
-  if (type === "Negative") return `Invalid values for ${data}: empty, malformed, duplicate, unauthorized.`;
-  if (type === "Edge") return `Boundary values for ${data}: minimum, maximum, null, special characters, long strings.`;
-  return `Valid values for ${data}.`;
+  const field = sentenceCase(data.split(",")[0]?.trim() || "field");
+  if (type === "Negative") return `${field} left empty, malformed ${field.toLowerCase()}, duplicate ${field.toLowerCase()}, or unauthorized role condition.`;
+  if (type === "Edge") return `${field} at minimum length, maximum length, one character over the limit, null, spaces-only, and special-character conditions.`;
+  return `${field} populated with a complete value that matches the accepted format for the requirement.`;
 }
 
 function expectedFor(type: TestCase["type"], criterion: AcceptanceCriterion) {

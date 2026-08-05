@@ -66,7 +66,7 @@ export function buildHtmlReport(generation: Generation, previousGenerations: Gen
 
 function renderCases(items: Array<{ generation: Generation; testCase: Generation["testCases"][number] }>) {
   return `<table>
-    <thead><tr><th>ID</th><th>Work Item Type</th><th>Title</th><th>Test Step</th><th>Step Action</th><th>Step Expected</th><th>Area Path</th><th>State</th><th>Test Type</th><th>AC</th><th>Priority</th></tr></thead>
+    <thead><tr><th>ID</th><th>Work Item Type</th><th>Title</th><th>Test Step</th><th>Step Action</th><th>Step Expected</th><th>Area Path</th><th>Assigned To</th><th>State</th><th>Test Type</th><th>AC</th><th>Priority</th><th>Actions</th></tr></thead>
     <tbody>${items.map(({ generation, testCase }) => azureCaseRows(testCase).map((row, index) => {
       const isMetadata = index === 0;
       return `<tr class="${isMetadata ? "metadata-row" : "step-row"}">
@@ -77,10 +77,12 @@ function renderCases(items: Array<{ generation: Generation; testCase: Generation
         <td>${escapeHtml(row.stepAction)}</td>
         <td>${escapeHtml(row.stepExpected)}</td>
         <td>${escapeHtml(isMetadata ? `${generation.requirement.projectName}\\${generation.requirement.moduleName}` : "")}</td>
+        <td></td>
         <td>${escapeHtml(isMetadata ? "Design" : "")}</td>
-        <td>${escapeHtml(isMetadata ? "Functional" : "")}</td>
-        <td>${escapeHtml(isMetadata ? testCase.acceptanceCriteriaId : "")}</td>
-        <td>${escapeHtml(isMetadata ? testCase.priority : "")}</td>
+        <td>${escapeHtml(isMetadata ? testCase.type : "")}</td>
+        <td>${escapeHtml(row.ac)}</td>
+        <td>${escapeHtml(row.priority)}</td>
+        <td>${escapeHtml(row.actions)}</td>
       </tr>`;
     }).join("")).join("")}</tbody>
   </table>`;

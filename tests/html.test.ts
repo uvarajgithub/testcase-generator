@@ -58,5 +58,6 @@ describe("HTML report", () => {
     expect(html).toContain("Previous Test Cases");
     expect(html).toContain("&lt;Current&gt;");
     expect(html).toContain("Previous");
+    expect(html).not.toMatch(/<td>POS-\d{3}:/);
   });
 });

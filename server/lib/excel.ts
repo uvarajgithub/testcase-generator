@@ -1,14 +1,13 @@
 import ExcelJS from "exceljs";
 import type { Generation, TestCase } from "../../src/lib/schemas";
 import { calculateCoverage } from "../../src/lib/analysis";
-import { azureCaseRows } from "../../src/lib/format";
+import { azureCaseRows, validateAzureTestCases } from "../../src/lib/format";
 import { sanitizeFilename } from "./http";
 
 export type AzureExportConfig = {
   areaPath?: string;
   assignedTo?: string;
   state?: string;
-  testType?: string;
 };
 
 const testCaseColumns: Array<[keyof TestCase, string, number]> = [
@@ -46,6 +45,8 @@ export function buildFilename(generation: Generation, date = new Date()) {
 }
 
 export async function buildWorkbook(generation: Generation, previousGenerations: Generation[] = [], azureConfig: AzureExportConfig = {}) {
+  const validationErrors = validateAzureTestCases(generation.testCases);
+  if (validationErrors.length) throw new Error(`Azure export validation failed: ${validationErrors.slice(0, 5).join(" ")}`);
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "TestCraft AI";
   workbook.created = new Date();
@@ -62,20 +63,22 @@ export async function buildWorkbook(generation: Generation, previousGenerations:
 function addAzureDevOpsImport(workbook: ExcelJS.Workbook, generation: Generation, azureConfig: AzureExportConfig) {
   const sheet = workbook.addWorksheet("Sheet2");
   sheet.columns = [
-    { key: "id", header: "ID", width: 8 },
+    { key: "id", header: "ID", width: 10 },
     { key: "workItemType", header: "Work Item Type", width: 18 },
-    { key: "title", header: "Title", width: 48 },
-    { key: "testStep", header: "Test Step", width: 11 },
-    { key: "stepAction", header: "Step Action", width: 52 },
-    { key: "stepExpected", header: "Step Expected", width: 52 },
-    { key: "areaPath", header: "Area Path", width: 28 },
-    { key: "assignedTo", header: "Assigned To", width: 28 },
-    { key: "state", header: "State", width: 12 },
-    { key: "testType", header: "Test Type", width: 16 }
+    { key: "title", header: "Title", width: 60 },
+    { key: "testStep", header: "Test Step", width: 12 },
+    { key: "stepAction", header: "Step Action", width: 55 },
+    { key: "stepExpected", header: "Step Expected", width: 60 },
+    { key: "areaPath", header: "Area Path", width: 30 },
+    { key: "assignedTo", header: "Assigned To", width: 25 },
+    { key: "state", header: "State", width: 15 },
+    { key: "testType", header: "Test Type", width: 18 },
+    { key: "ac", header: "AC", width: 15 },
+    { key: "priority", header: "Priority", width: 12 },
+    { key: "actions", header: "Actions", width: 20 }
   ];
 
   const state = sanitizeExcelValue(azureConfig.state || "Design");
-  const testType = sanitizeExcelValue(azureConfig.testType || "Functional");
   const areaPath = sanitizeExcelValue(azureConfig.areaPath || `${generation.requirement.projectName}\\${generation.requirement.moduleName}`);
   const assignedTo = sanitizeExcelValue(azureConfig.assignedTo || "");
 
@@ -92,7 +95,10 @@ function addAzureDevOpsImport(workbook: ExcelJS.Workbook, generation: Generation
         areaPath: isMetadata ? areaPath : "",
         assignedTo: isMetadata ? assignedTo : "",
         state: isMetadata ? state : "",
-        testType: isMetadata ? testType : ""
+        testType: isMetadata ? sanitizeExcelValue(testCase.type) : "",
+        ac: sanitizeExcelValue(row.ac),
+        priority: sanitizeExcelValue(row.priority),
+        actions: sanitizeExcelValue(row.actions)
       });
     });
   });
@@ -111,6 +117,7 @@ function sanitizeExcelValue(value: unknown) {
 
 function styleAzureSheet(sheet: ExcelJS.Worksheet) {
   sheet.views = [{ state: "frozen", ySplit: 1 }];
+  sheet.autoFilter = { from: "A1", to: sheet.getRow(1).getCell(sheet.columnCount).address };
   sheet.eachRow((row, rowNumber) => {
     row.font = { name: "Segoe UI", size: 11 };
     row.eachCell({ includeEmpty: true }, (cell) => {
@@ -127,6 +134,7 @@ function styleAzureSheet(sheet: ExcelJS.Worksheet) {
       }
     });
     if (rowNumber === 1) row.height = 22;
+    else row.height = Math.max(28, Math.min(90, row.actualCellCount * 4));
   });
 }
 

@@ -3,8 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { Shell } from "./components/Shell";
 import { Field } from "./components/Field";
 import { api } from "./lib/api";
-import { calculateCoverage } from "./lib/analysis";
-import { azureCaseRows } from "./lib/format";
+import { calculateCoverage, normalizeRequirementText } from "./lib/analysis";
+import { azureCaseRows, validateAzureTestCases } from "./lib/format";
 import { generationConfigSchema, priorities, testTypes, type CoverageSummary, type Generation, type GenerationConfig, type RequirementInput, type TestCase } from "./lib/schemas";
 
 const emptyRequirement: RequirementInput = {
@@ -24,7 +24,7 @@ const emptyRequirement: RequirementInput = {
 };
 
 const defaultConfig: GenerationConfig = generationConfigSchema.parse({
-  selectedTypes: ["Positive", "Negative", "Edge"],
+  selectedTypes: ["Positive", "Negative", "Validation", "Edge", "Security"],
   detailLevel: "Standard",
   includeTestData: true,
   includeExpectedResults: true,
@@ -35,7 +35,7 @@ const defaultConfig: GenerationConfig = generationConfigSchema.parse({
 });
 
 type ReqFile = { name: string; size: number; type: string };
-type AzureConfig = { areaPath: string; assignedTo: string; state: string; testType: string };
+type AzureConfig = { areaPath: string; assignedTo: string; state: string };
 
 export function App() {
   const [active, setActive] = useState("Generate");
@@ -51,7 +51,7 @@ export function App() {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [progress, setProgress] = useState<string[]>([]);
-  const [azureConfig, setAzureConfig] = useState<AzureConfig>({ areaPath: "", assignedTo: "", state: "Design", testType: "Functional" });
+  const [azureConfig, setAzureConfig] = useState<AzureConfig>({ areaPath: "", assignedTo: "", state: "Design" });
   const generatingRef = useRef(false);
 
   useEffect(() => {
@@ -150,6 +150,11 @@ export function App() {
 
   async function exportExcel() {
     if (!generation) return;
+    const validationErrors = validateAzureTestCases(generation.testCases);
+    if (validationErrors.length) {
+      setError(`Fix these Azure export issues before downloading: ${validationErrors.slice(0, 4).join(" ")}`);
+      return;
+    }
     setBusy("Exporting");
     setError("");
     try {
@@ -408,9 +413,9 @@ function ReviewTab({ generation, coverage, setGeneration, save, exportExcel, ope
                 <td>{isMetadata ? (azureConfig.areaPath || `${generation.requirement.projectName}\\${generation.requirement.moduleName}`) : ""}</td>
                 <td>{isMetadata ? azureConfig.assignedTo : ""}</td>
                 <td>{isMetadata ? azureConfig.state : ""}</td>
-                <td>{isMetadata ? azureConfig.testType : ""}</td>
-                <td>{isMetadata ? tc.acceptanceCriteriaId : ""}</td>
-                <td>{isMetadata ? tc.priority : ""}</td>
+                <td>{isMetadata ? tc.type : ""}</td>
+                <td>{row.ac}</td>
+                <td>{row.priority}</td>
                 <td className="row-actions">{isMetadata && <><button aria-label={`Edit ${tc.id}`} onClick={() => setEditing(tc)}><Edit3 size={16} /></button><button aria-label={`Duplicate ${tc.id}`} onClick={() => setGeneration({ ...generation, testCases: [...generation.testCases, { ...tc, id: `${tc.id}-COPY`, title: `${tc.title} copy` }] })}><Copy size={16} /></button><button aria-label={`Regenerate ${tc.id}`} onClick={() => replaceCase({ ...tc, testerComments: "Regeneration requested; preserved existing user edits." })}><RefreshCw size={16} /></button><button aria-label={`Delete ${tc.id}`} onClick={() => setGeneration({ ...generation, testCases: generation.testCases.filter((item) => item.id !== tc.id) })}><Trash2 size={16} /></button></>}</td>
               </tr>
             );
@@ -459,11 +464,10 @@ function AzureExportPanel({ config, setConfig, defaultArea, onExport }: { config
         <h2>Azure DevOps Export</h2>
         <p className="muted">Configure the metadata row values before downloading the import workbook.</p>
       </div>
-      <div className="grid four">
+      <div className="grid three">
         <Field label="Area Path"><input value={config.areaPath} onChange={(e) => setConfig({ ...config, areaPath: e.target.value })} placeholder={defaultArea} /></Field>
         <Field label="Assigned To"><input value={config.assignedTo} onChange={(e) => setConfig({ ...config, assignedTo: e.target.value })} placeholder="user@company.com" /></Field>
         <Field label="State"><select value={config.state} onChange={(e) => setConfig({ ...config, state: e.target.value })}><option>Design</option><option>Ready</option><option>Closed</option></select></Field>
-        <Field label="Test Type"><select value={config.testType} onChange={(e) => setConfig({ ...config, testType: e.target.value })}><option>Functional</option><option>Regression</option><option>Integration</option><option>Security</option><option>Accessibility</option></select></Field>
       </div>
       <div className="actions"><button className="primary" onClick={onExport}><FileSpreadsheet size={17} />Download Azure DevOps Excel</button></div>
     </section>
@@ -521,7 +525,7 @@ function toggleType(type: GenerationConfig["selectedTypes"][number], config: Gen
 }
 
 function withDefaults(requirement: RequirementInput, files: ReqFile[]) {
-  const text = requirement.acceptanceCriteria.trim() || `Requirement uploaded: ${files.map((file) => file.name).join(", ")}. Generate a starter suite and mark missing details as assumptions.`;
+  const text = normalizeRequirementText(requirement.acceptanceCriteria.trim() || `Requirement uploaded: ${files.map((file) => file.name).join(", ")}. Please add requirement details before generating a full suite.`);
   const title = requirement.requirementTitle.trim() || firstMeaningfulLine(text) || "Imported requirement";
   return {
     ...requirement,

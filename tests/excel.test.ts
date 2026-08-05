@@ -55,7 +55,7 @@ function sampleGeneration(): Generation {
 
 describe("Excel workbook", () => {
   it("builds required sheets and dropdown validations", async () => {
-    const buffer = await buildWorkbook(sampleGeneration(), [], { areaPath: "Billing\\Invoices", assignedTo: "qa@example.com", state: "Design", testType: "Functional" });
+    const buffer = await buildWorkbook(sampleGeneration(), [], { areaPath: "Billing\\Invoices", assignedTo: "qa@example.com", state: "Design" });
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(buffer);
     expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual([
@@ -79,21 +79,27 @@ describe("Excel workbook", () => {
       "Area Path",
       "Assigned To",
       "State",
-      "Test Type"
+      "Test Type",
+      "AC",
+      "Priority",
+      "Actions"
     ]);
     expect(adoSheet.getCell("A2").value).toBe("");
     expect(adoSheet.getCell("B2").value).toBe("Test Case");
-    expect(adoSheet.getCell("D2").value).toBe("");
-    expect(adoSheet.getCell("E2").value).toBe("");
-    expect(adoSheet.getCell("F2").value).toBe("");
+    expect(String(adoSheet.getCell("C2").value)).not.toMatch(/^POS-\d{3}:/);
+    expect(adoSheet.getCell("D2").value).toBe(1);
+    expect(adoSheet.getCell("E2").value).toBeTruthy();
+    expect(adoSheet.getCell("F2").value).toBeTruthy();
     expect(adoSheet.getCell("G2").value).toBe("Billing\\Invoices");
     expect(adoSheet.getCell("H2").value).toBe("qa@example.com");
     expect(adoSheet.getCell("I2").value).toBe("Design");
-    expect(adoSheet.getCell("J2").value).toBe("Functional");
+    expect(adoSheet.getCell("J2").value).toBe("Positive");
+    expect(adoSheet.getCell("K2").value).toBe("AC-001");
+    expect(adoSheet.getCell("L2").value).toBeTruthy();
     expect(adoSheet.getCell("A3").value).toBe("");
     expect(adoSheet.getCell("B3").value).toBe("");
     expect(adoSheet.getCell("C3").value).toBe("");
-    expect(adoSheet.getCell("D3").value).toBe(1);
+    expect(adoSheet.getCell("D3").value).toBe(2);
     expect(adoSheet.getCell("E3").value).toBeTruthy();
     expect(adoSheet.getCell("F3").value).toBeTruthy();
     expect(adoSheet.getCell("G3").value).toBe("");
@@ -109,17 +115,16 @@ describe("Excel workbook", () => {
 
   it("restarts step numbering and protects Azure values", async () => {
     const gen = sampleGeneration();
-    gen.testCases[0].steps[0] = "=Injected step that should be escaped";
+    gen.testCases[0].steps[0] = "=Open the Billing invoice payment page.";
     const buffer = await buildWorkbook(gen, [], { areaPath: "+Area", assignedTo: "@qa@example.com" });
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(buffer);
     const sheet = workbook.getWorksheet("Sheet2")!;
-    expect(String(sheet.getCell("E3").value)).toMatch(/^'/);
+    expect(String(sheet.getCell("E2").value)).toMatch(/^'/);
     expect(String(sheet.getCell("G2").value)).toBe("'+Area");
     expect(String(sheet.getCell("H2").value)).toBe("'@qa@example.com");
-    const nextMetadataRow = gen.testCases[0].steps.length + 3;
+    const nextMetadataRow = gen.testCases[0].steps.length + 2;
     expect(sheet.getCell(`B${nextMetadataRow}`).value).toBe("Test Case");
-    expect(sheet.getCell(`D${nextMetadataRow}`).value).toBe("");
-    expect(sheet.getCell(`D${nextMetadataRow + 1}`).value).toBe(1);
+    expect(sheet.getCell(`D${nextMetadataRow}`).value).toBe(1);
   });
 });
