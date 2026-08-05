@@ -1,5 +1,6 @@
 import { nanoid } from "nanoid";
 import type { AcceptanceCriterion, CoverageSummary, DetectedElement, Generation, RequirementInput, TestCase } from "./schemas";
+import { validateAzureTestCases } from "./format";
 
 const documentHeadingNames = [
   "Business Objective",
@@ -401,11 +402,25 @@ function typePrefix(type: TestCase["type"]) {
 export function generateCases(generation: Pick<Generation, "requirement" | "criteria" | "detectedElements" | "config">): TestCase[] {
   const model = inferRequirementModel(generation.requirement);
   if (model.feature === "TNA Supervisor") {
-    return tnaSupervisorCases(generation, model).slice(0, generation.config.maxCases);
+    const tnaGeneration = {
+      ...generation,
+      requirement: {
+        ...generation.requirement,
+        moduleName: "User Groups",
+        featureName: "TNA Supervisor",
+        requirementTitle: "TNA Supervisor user-group eligibility"
+      }
+    };
+    const extraCases = genericVariantCases(tnaGeneration).filter((testCase) => validateAzureTestCases([testCase]).length === 0);
+    return renumberByType(removeDuplicates([...tnaSupervisorCases(tnaGeneration, model), ...extraCases])).slice(0, generation.config.maxCases);
   }
   if (isLoginText(`${generation.requirement.requirementTitle} ${generation.requirement.acceptanceCriteria} ${generation.requirement.featureName}`)) {
     return loginCases(generation).slice(0, generation.config.maxCases);
   }
+  return renumberByType(removeDuplicates(genericVariantCases(generation))).slice(0, generation.config.maxCases);
+}
+
+function genericVariantCases(generation: Pick<Generation, "requirement" | "criteria" | "detectedElements" | "config">): TestCase[] {
   const counts: Partial<Record<TestCase["type"], number>> = {};
   const cases: TestCase[] = [];
   const selected = generation.config.selectedTypes;
@@ -422,7 +437,7 @@ export function generateCases(generation: Pick<Generation, "requirement" | "crit
       }
     }
   }
-  return removeDuplicates(cases);
+  return cases;
 }
 
 function expandedCriteriaForGeneration(requirement: RequirementInput, criteria: AcceptanceCriterion[], detectedElements: DetectedElement[] = []) {
@@ -1291,6 +1306,14 @@ export function removeDuplicates(cases: TestCase[]) {
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
+  });
+}
+
+function renumberByType(cases: TestCase[]) {
+  const counts: Partial<Record<TestCase["type"], number>> = {};
+  return cases.map((testCase) => {
+    counts[testCase.type] = (counts[testCase.type] ?? 0) + 1;
+    return { ...testCase, id: `${typePrefix(testCase.type)}-${String(counts[testCase.type]).padStart(3, "0")}` };
   });
 }
 

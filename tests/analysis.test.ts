@@ -127,6 +127,7 @@ Employees assigned to a supervisor become that supervisor's direct reports.`,
     expect(cells).not.toMatch(/Open Business Objective|Sample Business Objective|Business Objective displays/i);
     expect(cells).toContain("Open User Groups and select New User Group.");
     expect(cells).toContain("The TNA Supervisor field displays Yes and No radio-button options.");
+    expect(cases.length).toBeGreaterThan(9);
     expect(validateAzureTestCases(cases)).toEqual([]);
   });
 });
