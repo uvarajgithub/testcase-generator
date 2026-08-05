@@ -140,6 +140,53 @@ export function App() {
     }
   }
 
+  async function refineExisting() {
+    if (generatingRef.current || (!generation && !requirement.acceptanceCriteria.trim())) return;
+    generatingRef.current = true;
+    const sourceRequirement = generation?.requirement ?? requirement;
+    const prepared = withDefaults({ ...sourceRequirement, acceptanceCriteria: requirement.acceptanceCriteria.trim() || sourceRequirement.acceptanceCriteria }, requirementFiles);
+    setRequirement(prepared);
+    setBusy("Refining");
+    setError("");
+    setProgress(["Reading requirement sections", "Ignoring document headings", "Rebuilding Azure-ready test cases"]);
+    try {
+      const analysis = await api.analyze(prepared, screenshots).catch((err) => {
+        setError(err instanceof Error ? `Refinement analysis warning: ${err.message}. Continuing with available requirement text.` : "Refinement analysis warning. Continuing with available requirement text.");
+        return { criteria: [], detectedElements: [], warnings: ["Analysis fallback used."], assumptions: ["Analysis could not complete; refinement continued with available requirement text."], ambiguities: [] };
+      });
+      const data = await api.saveGeneration({
+        id: generation?.id,
+        createdAt: generation?.createdAt,
+        exportHistory: generation?.exportHistory,
+        requirement: prepared,
+        criteria: analysis.criteria,
+        screenshots,
+        detectedElements: analysis.detectedElements,
+        config,
+        assumptions: [...analysis.assumptions, "Existing cases were refined into the Azure-ready format."],
+        warnings: analysis.warnings,
+        ambiguities: analysis.ambiguities,
+        testCases: []
+      });
+      const validationErrors = validateAzureTestCases(data.generation.testCases);
+      if (validationErrors.length) {
+        setError(`Refinement needs review: ${validationErrors.slice(0, 4).join(" ")}`);
+      } else {
+        setMessage("Existing test cases refined into the discussed format.");
+      }
+      setGeneration(data.generation);
+      setCoverage(data.coverage);
+      setGenerations((prev) => [data.generation, ...prev.filter((item) => item.id !== data.generation.id)]);
+      setActive("Review Test Cases");
+      void refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Refinement failed. Check the requirement text and try again.");
+    } finally {
+      generatingRef.current = false;
+      setBusy("");
+    }
+  }
+
   async function saveGeneration(next: Generation, toast = "Draft saved.") {
     const data = await api.updateGeneration(next);
     setGeneration(data.generation);
@@ -207,6 +254,8 @@ export function App() {
             config={config}
             setConfig={setConfig}
             generate={generate}
+            refineExisting={refineExisting}
+            hasGeneration={Boolean(generation?.testCases.length)}
             busy={busy}
             progress={progress}
           />
@@ -236,10 +285,12 @@ function GenerateTab(props: {
   config: GenerationConfig;
   setConfig: (c: GenerationConfig) => void;
   generate: () => void;
+  refineExisting: () => void;
+  hasGeneration: boolean;
   busy: string;
   progress: string[];
 }) {
-  const { requirement, setRequirement, requirementFiles, setRequirementFiles, uploadRequirementFiles, screenshots, setScreenshots, uploadScreenshots, config, setConfig, generate, busy, progress } = props;
+  const { requirement, setRequirement, requirementFiles, setRequirementFiles, uploadRequirementFiles, screenshots, setScreenshots, uploadScreenshots, config, setConfig, generate, refineExisting, hasGeneration, busy, progress } = props;
   const [sourceMode, setSourceMode] = useState<"Manual Entry" | "Upload Requirement">("Manual Entry");
   const update = (key: keyof RequirementInput, value: string) => setRequirement({ ...requirement, [key]: value });
   const canGenerate = Boolean(requirement.acceptanceCriteria.trim());
@@ -350,6 +401,9 @@ function GenerateTab(props: {
 
       {busy && <ProgressList items={progress} />}
       <div className="actions">
+        <button onClick={refineExisting} disabled={Boolean(busy) || (!hasGeneration && !canGenerate)}>
+          <Check size={18} />{busy === "Refining" ? "Refining Existing Cases..." : "Refine Existing Test Cases"}
+        </button>
         <button className="primary big generate-button" onClick={generate} disabled={!canGenerate || Boolean(busy)}>
           <RefreshCw size={18} />{busy ? "Generating Test Cases…" : "Generate Test Cases"}
         </button>
