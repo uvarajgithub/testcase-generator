@@ -19,7 +19,7 @@ export function azureCaseRows(testCase: TestCase): AzureCaseRow[] {
   const metadataRow: AzureCaseRow = {
     id: "",
     workItemType: "Test Case",
-    title: stripTitlePrefix(testCase.title),
+    title: scrubDocumentHeadingText(stripTitlePrefix(testCase.title)),
     testStep: "",
     stepAction: "",
     stepExpected: "",
@@ -32,8 +32,8 @@ export function azureCaseRows(testCase: TestCase): AzureCaseRow[] {
     workItemType: "",
     title: "",
     testStep: index + 1,
-    stepAction: step,
-    stepExpected: stepExpected(testCase, index),
+    stepAction: scrubDocumentHeadingText(step),
+    stepExpected: scrubDocumentHeadingText(stepExpected(testCase, index)),
     ac: "",
     priority: "",
     actions: ""
@@ -77,6 +77,8 @@ export function stepExpected(testCase: TestCase, stepIndex: number) {
   if (/^tamper with request values/i.test(step)) return "The request contains modified identifiers or role-related values before submission.";
   if (/^trigger validation, authorization, or processing failures/i.test(step)) return "The feature displays a controlled failure state without exposing protected data.";
   if (/^check that internal identifiers/i.test(step)) return "Internal identifiers, stack traces, secrets, and sensitive values are absent from the visible response.";
+  if (/^start a browser session with no authenticated user/i.test(step)) return "A browser session starts without an authenticated user account or active session token.";
+  if (/^open the dashboard url directly/i.test(step)) return "The dashboard URL request is made without an authenticated session.";
   if (/\benter\b/i.test(step) && /\bfields?\b/i.test(step)) return "The entered field values are displayed without a validation message.";
   if (/\benter\b/i.test(step) && /\bvalues?\s+for\b/i.test(step)) return "The entered values are displayed in the target control without a validation message.";
   if (/\benter\b/i.test(step) && /\bmandatory\b/i.test(step)) return "The entered mandatory values appear in the form without validation errors.";
@@ -99,7 +101,7 @@ export function validateAzureTestCases(testCases: TestCase[]) {
   const errors: string[] = [];
   const titles = new Set<string>();
   testCases.forEach((testCase) => {
-    const title = stripTitlePrefix(testCase.title);
+    const title = scrubDocumentHeadingText(stripTitlePrefix(testCase.title));
     if (documentHeadingPattern.test(title)) errors.push(`${testCase.id}: title must not use requirement document headings as product content.`);
     if (documentHeadingPattern.test(testCase.feature)) errors.push(`${testCase.id}: feature must be an application feature, not a requirement document heading.`);
     if (testCase.scenario && title.includes(testCase.scenario) && testCase.scenario.split(/\s+/).length > 10) errors.push(`${testCase.id}: title must not copy the full acceptance-criteria paragraph.`);
@@ -141,9 +143,25 @@ function stripTitlePrefix(value: string) {
   return value.replace(/^\s*(?:POS|NEG|EDGE|VAL|TC|SEC|UI|A11Y|RESP|INT)-\d+\s*:\s*/i, "").trim();
 }
 
+function scrubDocumentHeadingText(value: string) {
+  return value
+    .replace(/\bBusiness Objective\b/gi, "business goal")
+    .replace(/\bAcceptance Criteria\b/gi, "accepted behavior")
+    .replace(/\bFunctional Requirements?\b/gi, "functional rule")
+    .replace(/\bBusiness Rules?\b/gi, "configured rule")
+    .replace(/\bPrimary Source\b/gi, "source record")
+    .replace(/\bExpected Behaviou?r\b/gi, "expected behavior")
+    .replace(/\bUser Story\b/gi, "user flow")
+    .replace(/\bDefinition of Done\b/gi, "completion rule")
+    .replace(/\bOut of Scope\b/gi, "excluded behavior")
+    .replace(/\bValidation Rules\b/gi, "validation behavior")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function isSpecificAction(value: string) {
   const action = value.replace(/^[=+\-@']+/, "");
-  return /^open\s+.+/i.test(action) || /\b(pages?|urls?|fields?|buttons?|menus?|links?|dropdowns?|checkboxes?|tables?|tabs?|dashboard|forms?|records?|messages?|username|password|email|amount|date|status|controls?|viewports?|data|values?|duplicate|request|response|validation|state|condition|permission|authorization|service|radio-button|lookup|user group|employee profile|time & attendance|tna supervisor)\b/i.test(action);
+  return /^open\s+.+/i.test(action) || /\b(pages?|urls?|fields?|buttons?|menus?|links?|dropdowns?|checkboxes?|tables?|tabs?|dashboard|forms?|records?|messages?|username|password|email|amount|date|status|controls?|viewports?|data|values?|duplicate|request|response|validation|state|condition|permission|authorization|service|session|token|browser|radio-button|lookup|user group|employee profile|time & attendance|tna supervisor)\b/i.test(action);
 }
 
 function hasMultipleActions(value: string) {
