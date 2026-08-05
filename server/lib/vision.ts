@@ -153,7 +153,7 @@ export async function analyseScreenshots(input: {
   for (const screenshot of input.screenshots) {
     validateScreenshot(screenshot);
     const vision = config.visionEnabled
-      ? await tryGeminiVision({ ...input, requirement, screenshot, config, fetchImpl: input.fetchImpl ?? fetch })
+      ? await tryGeminiVision({ ...input, requirement, screenshot, config, fetchImpl: input.fetchImpl ?? runtimeFetch })
       : { result: null, warning: "Gemini Vision is not configured." };
     if (vision.result && isReliableVisionResult(vision.result)) {
       reliableVision.push(vision.result);
@@ -593,6 +593,10 @@ function stringEnv(value: unknown) {
 
 function runtimeEnv() {
   return typeof process !== "undefined" ? process.env : {};
+}
+
+function runtimeFetch(input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) {
+  return fetch(input, init);
 }
 
 function textBytes(bytes: Uint8Array) {
