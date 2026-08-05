@@ -563,7 +563,15 @@ function geminiParseFailure(error: unknown): string {
     return `Gemini Vision returned structured output that needed unsupported fields: ${reason}.`;
   }
   if (error instanceof SyntaxError) return "Gemini Vision returned non-JSON output.";
+  if (error instanceof Error) return `Gemini Vision runtime failure: ${sanitizeDiagnostic(error.message)}.`;
   return "Gemini Vision was unavailable or returned invalid structured output.";
+}
+
+function sanitizeDiagnostic(value: string) {
+  return value
+    .replace(/AIza[0-9A-Za-z_-]+/g, "[redacted-key]")
+    .replace(/key=[^&\s]+/gi, "key=[redacted]")
+    .slice(0, 180);
 }
 
 function sanitizedProviderFailure(status: number) {
@@ -594,6 +602,9 @@ function textBytes(bytes: Uint8Array) {
 function base64(data: Uint8Array) {
   if (typeof Buffer !== "undefined") return Buffer.from(data).toString("base64");
   let binary = "";
-  data.forEach((byte) => { binary += String.fromCharCode(byte); });
+  const chunkSize = 0x8000;
+  for (let index = 0; index < data.length; index += chunkSize) {
+    binary += String.fromCharCode(...data.slice(index, index + chunkSize));
+  }
   return btoa(binary);
 }
