@@ -2,8 +2,9 @@ import { calculateCoverage, generateCases, inferElementsFromRequirement, newGene
 import { generationConfigSchema, generationSchema, requirementSchema, type Generation } from "../src/lib/schemas";
 import { buildFilename, buildWorkbook, type AzureExportConfig } from "./lib/excel";
 import { buildHtmlFilename, buildHtmlReport } from "./lib/html";
+import { STATIC_ASSETS } from "./generated-assets";
 
-type Env = { ASSETS: { fetch(request: Request): Promise<Response> } };
+type Env = Record<string, unknown>;
 type ApiFailure = { ok: false; error: { code: string; message: string; details?: unknown } };
 
 const generations: Generation[] = [];
@@ -114,19 +115,19 @@ export default {
       }
 
       if (url.pathname.startsWith("/api/")) return json(fail("NOT_FOUND", "The requested API route does not exist."), 404);
-      return serveAsset(request, env);
+      return serveAsset(request);
     } catch (error) {
       return json(fail("REQUEST_FAILED", error instanceof Error ? error.message : "Unexpected server error."), 400);
     }
   }
 };
 
-async function serveAsset(request: Request, env: Env) {
-  const response = await env.ASSETS.fetch(request);
-  if (response.status !== 404) return response;
+async function serveAsset(request: Request) {
   const url = new URL(request.url);
-  if (url.pathname.includes(".")) return response;
-  return env.ASSETS.fetch(new Request(new URL("/index.html", request.url), request));
+  const path = url.pathname === "/" ? "/index.html" : url.pathname;
+  const asset = STATIC_ASSETS[path] ?? (!path.includes(".") ? STATIC_ASSETS["/index.html"] : undefined);
+  if (!asset) return new Response("Not found", { status: 404 });
+  return new Response(asset.content, { headers: { "content-type": asset.contentType } });
 }
 
 function upsertGeneration(generation: Generation) {
