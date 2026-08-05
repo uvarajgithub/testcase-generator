@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Shell } from "./components/Shell";
 import { Field } from "./components/Field";
 import { api } from "./lib/api";
-import { calculateCoverage, normalizeRequirementText } from "./lib/analysis";
+import { calculateCoverage, inferRequirementModel, isDocumentHeading, normalizeRequirementText } from "./lib/analysis";
 import { azureCaseRows, validateAzureTestCases } from "./lib/format";
 import { generationConfigSchema, priorities, testTypes, type CoverageSummary, type Generation, type GenerationConfig, type RequirementInput, type TestCase } from "./lib/schemas";
 
@@ -526,13 +526,15 @@ function toggleType(type: GenerationConfig["selectedTypes"][number], config: Gen
 
 function withDefaults(requirement: RequirementInput, files: ReqFile[]) {
   const text = normalizeRequirementText(requirement.acceptanceCriteria.trim() || `Requirement uploaded: ${files.map((file) => file.name).join(", ")}. Please add requirement details before generating a full suite.`);
-  const title = requirement.requirementTitle.trim() || firstMeaningfulLine(text) || "Imported requirement";
+  const model = inferRequirementModel({ ...requirement, acceptanceCriteria: text });
+  const firstLine = firstMeaningfulLine(text);
+  const title = (requirement.requirementTitle.trim() && !isDocumentHeading(requirement.requirementTitle) ? requirement.requirementTitle.trim() : "") || (firstLine && !isDocumentHeading(firstLine) ? firstLine : "") || model.feature || "Imported requirement";
   return {
     ...requirement,
     acceptanceCriteria: text,
     projectName: requirement.projectName.trim() || "Untitled Project",
     moduleName: requirement.moduleName.trim() || "General",
-    featureName: requirement.featureName.trim() || title,
+    featureName: requirement.featureName.trim() && !isDocumentHeading(requirement.featureName) ? requirement.featureName.trim() : model.feature || title,
     requirementId: requirement.requirementId.trim() || `REQ-${Date.now().toString().slice(-6)}`,
     requirementTitle: title,
     userRole: requirement.userRole.trim() || "QA user"
@@ -540,7 +542,7 @@ function withDefaults(requirement: RequirementInput, files: ReqFile[]) {
 }
 
 function firstMeaningfulLine(text: string) {
-  return text.split(/\r?\n/).map((line) => line.replace(/^\s*(?:[-*]|\d+[.)])\s*/, "").trim()).find(Boolean);
+  return text.split(/\r?\n/).map((line) => line.replace(/^\s*(?:[-*]|\d+[.)])\s*/, "").trim()).find((line) => line && !isDocumentHeading(line));
 }
 
 function FileList({ files, remove }: { files: ReqFile[]; remove: (name: string) => void }) {

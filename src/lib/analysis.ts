@@ -1,6 +1,49 @@
 import { nanoid } from "nanoid";
 import type { AcceptanceCriterion, CoverageSummary, DetectedElement, Generation, RequirementInput, TestCase } from "./schemas";
 
+const documentHeadingNames = [
+  "Business Objective",
+  "Acceptance Criteria",
+  "Description",
+  "Requirement",
+  "Functional Requirement",
+  "Functional Requirements",
+  "Business Rule",
+  "Business Rules",
+  "Background",
+  "Scope",
+  "Assumption",
+  "Assumptions",
+  "Dependency",
+  "Dependencies",
+  "Notes",
+  "Primary Source",
+  "Expected Behaviour",
+  "Expected Behavior",
+  "User Story",
+  "Definition of Done",
+  "Out of Scope",
+  "Validation Rules"
+];
+
+const scenarioSectionNames = new Set(["acceptance criteria", "functional requirement", "functional requirements", "validation rules", "business rule", "business rules"]);
+const contextSectionNames = new Set(["business objective", "description", "background", "notes", "scope", "out of scope", "assumption", "assumptions", "dependency", "dependencies", "primary source", "user story", "definition of done"]);
+
+type RequirementModel = {
+  businessContext: string;
+  navigation: string[];
+  page: string;
+  feature: string;
+  controlType: string;
+  options: string[];
+  defaultValue: string;
+  userRole: string;
+  downstreamPage: string;
+  businessOutcome: string;
+  rules: string[];
+  scenarioText: string;
+};
+
 const uiPatterns: Array<[string, string]> = [
   ["button", "Button"],
   ["submit", "Button"],
@@ -26,15 +69,16 @@ const uiPatterns: Array<[string, string]> = [
 ];
 
 export function parseAcceptanceCriteria(text: string): AcceptanceCriterion[] {
-  const normalized = normalizeRequirementText(text).replace(/\r\n/g, "\n").trim();
+  const normalized = scenarioSourceText(text).replace(/\r\n/g, "\n").trim();
   const lines = normalized
     .split(/\n+/)
-    .map((line) => line.replace(/^\s*(?:[-*]|\d+[.)])\s*/, "").trim())
+    .map((line) => cleanRequirementLine(line))
+    .filter((line) => !isDocumentHeading(line))
     .filter(Boolean);
   const gwtBlocks = normalized.match(/given[\s\S]*?(?=(?:\n\s*given\b)|$)/gi) ?? [];
   const candidates = gwtBlocks.length > 1 ? gwtBlocks.map((b) => b.trim()) : lines.length > 1 ? lines : [normalized].filter(Boolean);
 
-  return candidates.map((rawCriterion, index) => {
+  return candidates.map((rawCriterion, index) => cleanRequirementLine(rawCriterion)).filter((rawCriterion) => rawCriterion && !isDocumentHeading(rawCriterion)).map((rawCriterion, index) => {
     const providedId = rawCriterion.match(/^\s*((?:AC|REQ|US|BR)-?\d{1,4})\s*[:.)-]\s*(.+)$/i);
     const criterion = providedId ? providedId[2].trim() : rawCriterion;
     const lower = criterion.toLowerCase();
@@ -86,7 +130,7 @@ function normalizeAction(value: string) {
 }
 
 function inputTerms(criterion: string) {
-  const known = (criterion.match(/\b(email|password|name|date|amount|file|status|role|search|filter|quantity|address|account details|profile details|payment details|order details|login details)\b/gi) ?? [])
+  const known = (criterion.match(/\b(tna supervisor|supervisor lookup|user group|user groups|employee profile|time & attendance|email|password|name|date|amount|file|status|role|search|filter|quantity|address|account details|profile details|payment details|order details|login details)\b/gi) ?? [])
     .map((value) => value.toLowerCase());
   const phraseMatches = Array.from(criterion.matchAll(/\b(?:enter|enters|provide|provides|select|selects|upload|uploads|search|searches|submit|submits)\s+(?:a|an|the|valid|invalid|required|mandatory|optional|new|existing|\s)*([a-z][a-z0-9 /-]{2,40}?)(?=\s+(?:when|then|and|or|with|to|for)\b|[.,;]|$)/gi))
     .map((match) => cleanInput(match[1]));
@@ -97,6 +141,7 @@ function inputTerms(criterion: string) {
 
 function cleanInput(value: string) {
   return cleanPhrase(value)
+    .replace(documentHeadingPattern(), "")
     .replace(/\b(details|values|data|information)\s*$/i, "$1")
     .replace(/\b(the|a|an|valid|invalid|required|mandatory|optional|new|existing)\b/gi, "")
     .replace(/\s+/g, " ")
@@ -117,6 +162,135 @@ export function normalizeRequirementText(value: string) {
     .replace(/[^\S\r\n]+/g, " ")
     .replace(/\s+([.,;:])/g, "$1")
     .trim();
+}
+
+export function isDocumentHeading(value: string) {
+  const cleaned = cleanPhrase(value)
+    .replace(/^\s*(?:[-*]|\d+(?:\.\d+)*[.)])\s*/, "")
+    .replace(/:$/, "")
+    .trim();
+  return documentHeadingNames.some((heading) => heading.toLowerCase() === cleaned.toLowerCase());
+}
+
+export function scenarioSourceText(text: string) {
+  const normalized = normalizeRequirementText(text).replace(/\r\n/g, "\n");
+  const sections = parseRequirementSections(normalized);
+  const prioritized = sections.filter((section) => scenarioSectionNames.has(section.heading.toLowerCase())).map((section) => section.body).filter(Boolean);
+  const source = prioritized.length ? prioritized.join("\n") : normalized;
+  return source
+    .split(/\n+/)
+    .map((line) => cleanRequirementLine(line))
+    .filter((line) => line && !isDocumentHeading(line))
+    .join("\n")
+    .trim();
+}
+
+function parseRequirementSections(text: string) {
+  const sections: Array<{ heading: string; body: string }> = [];
+  let current: { heading: string; lines: string[] } | null = null;
+  const push = () => {
+    if (current) sections.push({ heading: current.heading, body: current.lines.map(cleanRequirementLine).filter(Boolean).join("\n").trim() });
+  };
+
+  for (const rawLine of text.split(/\n+/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const inline = splitInlineHeading(line);
+    if (inline) {
+      push();
+      current = { heading: inline.heading, lines: inline.body ? [inline.body] : [] };
+      continue;
+    }
+    if (isDocumentHeading(line)) {
+      push();
+      current = { heading: cleanPhrase(line).replace(/:$/, ""), lines: [] };
+      continue;
+    }
+    if (!current) current = { heading: "Acceptance Criteria", lines: [] };
+    current.lines.push(line);
+  }
+  push();
+  return sections;
+}
+
+function splitInlineHeading(line: string) {
+  const cleaned = line.replace(/^\s*(?:[-*]|\d+(?:\.\d+)*[.)])\s*/, "").trim();
+  const match = cleaned.match(/^([A-Z][A-Za-z &/]{2,45})\s*:\s*(.+)?$/);
+  if (!match) return null;
+  const heading = cleanPhrase(match[1]);
+  return isDocumentHeading(heading) ? { heading, body: match[2]?.trim() ?? "" } : null;
+}
+
+function cleanRequirementLine(line: string) {
+  const cleaned = normalizeRequirementText(line)
+    .replace(/^\s*(?:[-*]|\d+(?:\.\d+)*[.)])\s*/, "")
+    .trim();
+  const inline = splitInlineHeading(cleaned);
+  if (inline) return inline.body;
+  return cleaned;
+}
+
+function documentHeadingPattern() {
+  return new RegExp(`\\b(?:${documentHeadingNames.map(escapeRegex).join("|")})\\b`, "gi");
+}
+
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function inferRequirementModel(requirement: RequirementInput): RequirementModel {
+  const combined = normalizeRequirementText([
+    requirement.acceptanceCriteria,
+    requirement.businessRules,
+    requirement.requirementDescription,
+    requirement.requirementTitle,
+    requirement.featureName,
+    requirement.moduleName,
+    requirement.userRole
+  ].filter(Boolean).join("\n"));
+  const sections = parseRequirementSections(combined);
+  const businessContext = sections.filter((section) => contextSectionNames.has(section.heading.toLowerCase())).map((section) => section.body).filter(Boolean).join("\n");
+  const scenarioText = scenarioSourceText(combined);
+  const source = `${scenarioText}\n${businessContext}`;
+  const hasTnaSupervisor = /\btna supervisor\b/i.test(source);
+  const hasUserGroup = /\buser groups?\b|\bnew user group\b/i.test(source);
+  const page = /\bnew user group\b/i.test(source) ? "New User Group" : safeTerm(requirement.featureName) || safeTerm(requirement.requirementTitle);
+  const feature = hasTnaSupervisor ? "TNA Supervisor" : safeTerm(requirement.featureName) || inferFeatureFromText(source) || page;
+  const navigation = hasUserGroup ? ["User Groups", "New User Group"] : [safeTerm(requirement.moduleName), page].filter(Boolean);
+  const controlType = hasTnaSupervisor && /\bradio(?:-| )?button\b|\byes\b[\s\S]*\bno\b/i.test(source) ? "radio button" : "";
+  const options = hasTnaSupervisor && /\byes\b[\s\S]*\bno\b|\bno\b[\s\S]*\byes\b/i.test(source) ? ["Yes", "No"] : [];
+  const defaultValue = hasTnaSupervisor && /\bdefault(?:s|ed)?\s+(?:value\s+)?(?:is\s+|to\s+)?no\b|\bno\s+is\s+selected\s+by\s+default\b/i.test(source) ? "No" : "";
+  const downstreamPage = /\bemployee profile\b/i.test(source) && /\btime\s*&\s*attendance\b/i.test(source) ? "Employee Profile > Time & Attendance" : "";
+  const businessOutcome = hasTnaSupervisor ? "Only users belonging to TNA Supervisor groups can be selected as supervisors." : "";
+  const rules = Array.from(new Set([
+    ...scenarioText.split(/\n+/).map(cleanRequirementLine).filter(Boolean),
+    ...requirement.businessRules.split(/\n+/).map(cleanRequirementLine).filter(Boolean)
+  ])).filter((line) => !isDocumentHeading(line));
+
+  return {
+    businessContext,
+    navigation,
+    page,
+    feature,
+    controlType,
+    options,
+    defaultValue,
+    userRole: /administrator/i.test(source) ? "Administrator" : requirement.userRole || "User",
+    downstreamPage,
+    businessOutcome,
+    rules,
+    scenarioText
+  };
+}
+
+function safeTerm(value: string) {
+  const cleaned = cleanPhrase(value);
+  return cleaned && !isDocumentHeading(cleaned) ? cleaned : "";
+}
+
+function inferFeatureFromText(value: string) {
+  const explicitField = value.match(/\b([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9&]+){0,3})\s+(?:field|radio button|lookup|page)\b/);
+  return explicitField && !isDocumentHeading(explicitField[1]) ? explicitField[1] : "";
 }
 
 function normalizeCriterionId(value: string) {
@@ -148,28 +322,43 @@ function sentenceCase(value: string) {
 }
 
 export function inferElementsFromRequirement(requirement: RequirementInput, screenshots: Array<{ id: string; filename: string }>): DetectedElement[] {
-  const source = `${requirement.requirementTitle} ${requirement.requirementDescription} ${requirement.acceptanceCriteria} ${requirement.businessRules}`;
+  const model = inferRequirementModel(requirement);
+  const source = `${model.scenarioText} ${requirement.requirementDescription} ${requirement.businessRules}`;
   const matches = uiPatterns.filter(([needle]) => source.toLowerCase().includes(needle));
   const baseScreenshot = screenshots[0] ?? { id: "manual", filename: "Manually reviewed input" };
+  const inferredElements = model.feature === "TNA Supervisor" ? [{
+    id: "UI-001",
+    screenshotId: baseScreenshot.id,
+    screenshotName: baseScreenshot.filename,
+    type: "Radio button",
+    label: "TNA Supervisor",
+    visibleText: "TNA Supervisor, Yes, No",
+    relatedAcceptanceCriterionId: undefined,
+    confidence: screenshots.length ? 0.65 : 0.55,
+    userCorrection: "",
+    notes: "Inferred from acceptance criteria and requirement text; document headings were ignored.",
+    assumption: ""
+  }] : [];
   const elements = matches.map(([, type], index) => ({
     id: `UI-${String(index + 1).padStart(3, "0")}`,
     screenshotId: baseScreenshot.id,
     screenshotName: baseScreenshot.filename,
     type,
-    label: type.replace("Uploaded-file", "File upload"),
+    label: isDocumentHeading(type) ? model.feature : type.replace("Uploaded-file", "File upload"),
     visibleText: type,
     relatedAcceptanceCriterionId: undefined,
     confidence: screenshots.length ? 0.42 : 0.25,
     userCorrection: "",
     notes: screenshots.length ? "Detected by filename and requirement correlation. Review before generation." : "Manual fallback: add screenshot details before generation.",
     assumption: "AI vision is unavailable locally; this finding must be reviewed by the user."
-  }));
+  })).filter((item) => !isDocumentHeading(item.label));
+  if (inferredElements.length) return inferredElements;
   return elements.length ? elements : [{
     id: "UI-001",
     screenshotId: baseScreenshot.id,
     screenshotName: baseScreenshot.filename,
     type: "Reviewed screen",
-    label: requirement.featureName,
+    label: model.feature || requirement.featureName,
     visibleText: requirement.requirementTitle,
     relatedAcceptanceCriterionId: undefined,
     confidence: 0.2,
@@ -196,6 +385,10 @@ function typePrefix(type: TestCase["type"]) {
 }
 
 export function generateCases(generation: Pick<Generation, "requirement" | "criteria" | "detectedElements" | "config">): TestCase[] {
+  const model = inferRequirementModel(generation.requirement);
+  if (model.feature === "TNA Supervisor") {
+    return tnaSupervisorCases(generation, model).slice(0, generation.config.maxCases);
+  }
   if (isLoginText(`${generation.requirement.requirementTitle} ${generation.requirement.acceptanceCriteria} ${generation.requirement.featureName}`)) {
     return loginCases(generation).slice(0, generation.config.maxCases);
   }
@@ -216,6 +409,142 @@ export function generateCases(generation: Pick<Generation, "requirement" | "crit
     }
   }
   return removeDuplicates(cases);
+}
+
+function tnaSupervisorCases(generation: Pick<Generation, "requirement" | "criteria" | "detectedElements" | "config">, model: RequirementModel): TestCase[] {
+  const acId = generation.criteria[0]?.id ?? "AC-001";
+  const base = {
+    requirementId: generation.requirement.requirementId,
+    module: generation.requirement.moduleName,
+    feature: "TNA Supervisor",
+    scenario: model.scenarioText || generation.requirement.acceptanceCriteria,
+    objective: "Verify TNA Supervisor user-group behavior from the acceptance criteria.",
+    preconditions: generation.requirement.preconditions || "An Administrator can access User Groups and Employee Profile.",
+    postconditions: "User-group supervisor eligibility and saved values remain consistent after execution.",
+    severity: "High" as const,
+    automationCandidate: "Yes" as const,
+    automationNotes: "Automate with selectors for User Groups, New User Group, TNA Supervisor, Yes, No, Save, Employee Profile, Time & Attendance, and Supervisor lookup.",
+    screenshotReference: generation.detectedElements[0]?.screenshotName ?? "",
+    detectedUIElement: "New User Group page: TNA Supervisor radio button with Yes and No options",
+    assumptions: "Source section: Acceptance Criteria. Business Objective was used only as context.",
+    executionStatus: "Not Run" as const,
+    actualResult: "",
+    defectId: "",
+    testerComments: "",
+    inferred: false
+  };
+  const wanted = new Set(generation.config.selectedTypes);
+  const drafts: Array<Pick<TestCase, "type" | "title" | "testData" | "steps" | "expectedResult" | "priority" | "tags" | "automationCandidate">> = [
+    {
+      type: "Positive",
+      title: "Verify the TNA Supervisor field displays Yes and No options with No selected by default on the New User Group page",
+      testData: "Administrator opens a new user group without changing the TNA Supervisor value.",
+      steps: ["Open User Groups and select New User Group.", "Locate the TNA Supervisor field.", "Review the selected value without interacting with the field.", "Select Yes in the TNA Supervisor field.", "Select No in the TNA Supervisor field."],
+      expectedResult: "No becomes selected and Yes becomes unselected.",
+      priority: "High",
+      tags: ["acceptance-criteria", "default-value", "radio-button", acId],
+      automationCandidate: "Yes"
+    },
+    {
+      type: "Positive",
+      title: "Verify an administrator can save a user group after selecting Yes for the TNA Supervisor field",
+      testData: "Unique user-group name and group code with TNA Supervisor set to Yes.",
+      steps: ["Open User Groups and select New User Group.", "Enter a unique group name and group code in the mandatory user-group fields.", "Select Yes in the TNA Supervisor field.", "Click the Save button on the New User Group page.", "Reopen the saved user-group record."],
+      expectedResult: "The saved record displays TNA Supervisor as Yes.",
+      priority: "High",
+      tags: ["acceptance-criteria", "save", "yes", acId],
+      automationCandidate: "Yes"
+    },
+    {
+      type: "Positive",
+      title: "Verify an administrator can save a user group after retaining No for the TNA Supervisor field",
+      testData: "Unique user-group name and group code with the default TNA Supervisor value retained as No.",
+      steps: ["Open User Groups and select New User Group.", "Enter a unique group name and group code in the mandatory user-group fields.", "Retain the default No selection in the TNA Supervisor field.", "Click the Save button on the New User Group page.", "Reopen the saved user-group record."],
+      expectedResult: "The saved record displays TNA Supervisor as No.",
+      priority: "High",
+      tags: ["acceptance-criteria", "save", "no", acId],
+      automationCandidate: "Yes"
+    },
+    {
+      type: "Positive",
+      title: "Verify users belonging to a TNA Supervisor group appear in the supervisor lookup under Time & Attendance",
+      testData: "One saved user group with TNA Supervisor set to Yes and one user assigned to that group.",
+      steps: ["Create one user group with TNA Supervisor set to Yes.", "Add a user to the TNA Supervisor user group.", "Open Employee Profile > Time & Attendance.", "Search for the user assigned to the TNA Supervisor group.", "Select the user in the Supervisor lookup.", "Click the Save button on the employee profile."],
+      expectedResult: "The supervisor is saved successfully for the employee.",
+      priority: "High",
+      tags: ["business-rule", "supervisor-lookup", "eligibility", acId],
+      automationCandidate: "Yes"
+    },
+    {
+      type: "Negative",
+      title: "Verify users belonging to a non-TNA Supervisor group do not appear in the supervisor lookup",
+      testData: "One saved user group with TNA Supervisor set to No and one user assigned only to that group.",
+      steps: ["Create one user group with TNA Supervisor set to No.", "Add a user to the non-TNA Supervisor group.", "Open Employee Profile > Time & Attendance.", "Search for the user assigned only to the non-TNA Supervisor group."],
+      expectedResult: "The user does not appear in the Supervisor lookup results.",
+      priority: "High",
+      tags: ["business-rule", "supervisor-lookup", "exclusion", acId],
+      automationCandidate: "Yes"
+    },
+    {
+      type: "Validation",
+      title: "Verify the application displays validation feedback when mandatory user-group details are missing",
+      testData: "New user group with mandatory user-group fields empty and TNA Supervisor set to Yes.",
+      steps: ["Open User Groups and select New User Group.", "Leave the mandatory user-group name field empty.", "Select Yes in the TNA Supervisor field.", "Click the Save button on the New User Group page.", "Review the validation message on the New User Group page."],
+      expectedResult: "The form is not saved when mandatory user-group details are missing.",
+      priority: "High",
+      tags: ["validation", "mandatory-fields", acId],
+      automationCandidate: "Yes"
+    },
+    {
+      type: "Edge",
+      title: "Verify changing a user group from No to Yes updates supervisor eligibility correctly",
+      testData: "Existing user group saved with TNA Supervisor set to No and one assigned user.",
+      steps: ["Open an existing user-group record with TNA Supervisor set to No.", "Select Yes in the TNA Supervisor field.", "Click the Save button on the user-group record.", "Open Employee Profile > Time & Attendance.", "Search for the user assigned to the updated TNA Supervisor group."],
+      expectedResult: "The updated user appears in the Supervisor lookup results.",
+      priority: "High",
+      tags: ["edge", "eligibility-change", "no-to-yes", acId],
+      automationCandidate: "Yes"
+    },
+    {
+      type: "Edge",
+      title: "Verify changing a user group from Yes to No removes supervisor eligibility correctly",
+      testData: "Existing user group saved with TNA Supervisor set to Yes and one assigned user.",
+      steps: ["Open an existing user-group record with TNA Supervisor set to Yes.", "Select No in the TNA Supervisor field.", "Click the Save button on the user-group record.", "Open Employee Profile > Time & Attendance.", "Search for the user assigned only to the updated non-TNA Supervisor group."],
+      expectedResult: "The updated user is excluded from the Supervisor lookup results.",
+      priority: "High",
+      tags: ["edge", "eligibility-change", "yes-to-no", acId],
+      automationCandidate: "Yes"
+    },
+    {
+      type: "Security",
+      title: "Verify a user without administrator permission cannot change the TNA Supervisor field",
+      testData: "Lower-privilege user without User Groups edit permission.",
+      steps: ["Sign in as a user without User Groups edit permission.", "Open the protected User Groups page URL.", "Attempt to edit the TNA Supervisor field on an existing user-group record.", "Review the authorization message and saved user-group record."],
+      expectedResult: "The TNA Supervisor value is not changed by the unauthorized user.",
+      priority: "High",
+      tags: ["security", "authorization", acId],
+      automationCandidate: "Yes"
+    }
+  ];
+
+  const counts: Partial<Record<TestCase["type"], number>> = {};
+  return drafts.filter((draft) => wanted.has(draft.type)).map((draft) => {
+    counts[draft.type] = (counts[draft.type] ?? 0) + 1;
+    const prefix = typePrefix(draft.type);
+    return {
+      ...base,
+      id: `${prefix}-${String(counts[draft.type]).padStart(3, "0")}`,
+      acceptanceCriteriaId: acId,
+      type: draft.type,
+      title: draft.title,
+      testData: generation.config.includeTestData ? draft.testData : "",
+      steps: draft.steps,
+      expectedResult: generation.config.includeExpectedResults ? draft.expectedResult : "",
+      priority: draft.priority,
+      automationCandidate: draft.automationCandidate,
+      tags: draft.tags
+    };
+  });
 }
 
 function loginCases(generation: Pick<Generation, "requirement" | "criteria" | "detectedElements" | "config">): TestCase[] {

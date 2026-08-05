@@ -1,5 +1,8 @@
 import type { TestCase } from "./schemas";
 
+const documentHeadingPattern = /\b(Business Objective|Acceptance Criteria|Functional Requirements?|Business Rules?|Primary Source|Expected Behaviou?r|User Story|Definition of Done|Out of Scope|Validation Rules)\b/i;
+const documentHeadingAsControlPattern = /\b(?:Open|Enter|Review|Observe|Locate|Select)\s+(?:Business Objective|Acceptance Criteria|Description|Requirement|Functional Requirements?|Business Rules?|Background|Scope|Assumptions?|Dependencies|Notes|Primary Source|Expected Behaviou?r|User Story|Definition of Done|Out of Scope|Validation Rules)\b|\bSample\s+(?:Business Objective|Acceptance Criteria|Description|Requirement|Functional Requirements?|Business Rules?)\b/i;
+
 export type AzureCaseRow = {
   id: string;
   workItemType: string;
@@ -30,8 +33,45 @@ export function azureCaseRows(testCase: TestCase): AzureCaseRow[] {
 }
 
 export function stepExpected(testCase: TestCase, stepIndex: number) {
-  const step = testCase.steps[stepIndex] ?? "";
+  const step = (testCase.steps[stepIndex] ?? "").replace(/^[=+\-@']+/, "");
   if (stepIndex === testCase.steps.length - 1) return testCase.expectedResult;
+  if (/open user groups and select new user group/i.test(step)) return "The New User Group page opens successfully.";
+  if (/locate the tna supervisor field/i.test(step)) return "The TNA Supervisor field displays Yes and No radio-button options.";
+  if (/review the selected value without interacting/i.test(step)) return "No is selected by default and Yes remains unselected.";
+  if (/select yes in the tna supervisor field/i.test(step)) return "Yes becomes selected and No becomes unselected.";
+  if (/select no in the tna supervisor field/i.test(step)) return "No becomes selected and Yes becomes unselected.";
+  if (/retain the default no selection in the tna supervisor field/i.test(step)) return "No remains selected in the TNA Supervisor field.";
+  if (/mandatory user-group fields/i.test(step) && /\benter\b/i.test(step)) return "The group name and group code appear in their fields without validation errors.";
+  if (/mandatory user-group name field empty/i.test(step)) return "The mandatory user-group name field remains empty.";
+  if (/click the save button/i.test(step) && /employee profile/i.test(step)) return "The employee profile save request is submitted with the selected Supervisor value.";
+  if (/click the save button/i.test(step)) return "The current user-group form values are submitted for validation and save processing.";
+  if (/reopen the saved user-group record/i.test(step)) return "The saved user-group record opens with the persisted TNA Supervisor field visible.";
+  if (/create one user group with tna supervisor set to yes/i.test(step)) return "The TNA Supervisor user group is saved successfully.";
+  if (/create one user group with tna supervisor set to no/i.test(step)) return "The non-TNA Supervisor user group is saved successfully.";
+  if (/add a user to the tna supervisor user group/i.test(step)) return "The user is successfully assigned to the TNA Supervisor group.";
+  if (/add a user to the non-tna supervisor group/i.test(step)) return "The user is successfully assigned to the non-TNA Supervisor group.";
+  if (/open employee profile > time & attendance/i.test(step)) return "The Time & Attendance section opens and the Supervisor lookup is available.";
+  if (/search for the user assigned to the tna supervisor group/i.test(step)) return "The user appears in the Supervisor lookup results.";
+  if (/select the user in the supervisor lookup/i.test(step)) return "The selected user appears in the Supervisor field.";
+  if (/search for the user assigned only to the non-tna supervisor group/i.test(step)) return "The user does not appear in the Supervisor lookup results.";
+  if (/search for the user assigned to the updated tna supervisor group/i.test(step)) return "The updated user appears in the Supervisor lookup results.";
+  if (/search for the user assigned only to the updated non-tna supervisor group/i.test(step)) return "The updated user is excluded from the Supervisor lookup results.";
+  if (/sign in as a user without user groups edit permission/i.test(step)) return "The lower-privilege session opens without User Groups edit permission.";
+  if (/sign in as a user role that does not have permission/i.test(step)) return "The lower-privilege session opens without the required feature permission.";
+  if (/open the protected user groups page url/i.test(step)) return "The User Groups page is blocked or opens in read-only mode for the lower-privilege user.";
+  if (/attempt to edit the tna supervisor field/i.test(step)) return "The TNA Supervisor field cannot be changed by the lower-privilege user.";
+  if (/^start\s+.+\s+form with\b/i.test(step)) return "The form contains valid data before the retry or interruption condition is applied.";
+  if (/^interrupt\s+.+\s+submission\b/i.test(step)) return "The in-progress submission is stopped before a success state or duplicate record is created.";
+  if (/^focus\b/i.test(step) && /\bfields?\b/i.test(step)) return "The named field receives focus and exposes its validation-ready state.";
+  if (/^replace\b/i.test(step) && /\bmalformed\b/i.test(step)) return "The corrected value replaces the malformed value in the named field.";
+  if (/^correct the values\b/i.test(step) || /^correct the error\b/i.test(step)) return "The corrected values appear in the relevant fields and validation messages are ready to clear.";
+  if (/^tamper with request values/i.test(step)) return "The request contains modified identifiers or role-related values before submission.";
+  if (/^trigger validation, authorization, or processing failures/i.test(step)) return "The feature displays a controlled failure state without exposing protected data.";
+  if (/^check that internal identifiers/i.test(step)) return "Internal identifiers, stack traces, secrets, and sensitive values are absent from the visible response.";
+  if (/\benter\b/i.test(step) && /\bfields?\b/i.test(step)) return "The entered field values are displayed without a validation message.";
+  if (/\benter\b/i.test(step) && /\bvalues?\s+for\b/i.test(step)) return "The entered values are displayed in the target control without a validation message.";
+  if (/\benter\b/i.test(step) && /\bmandatory\b/i.test(step)) return "The entered mandatory values appear in the form without validation errors.";
+  if (/\bsubmit\b|\bsave\b/i.test(step) && /\bform\b|\bchange\b|\brequest\b/i.test(step)) return "The named request is submitted with the current form values.";
   if (/^open\b/i.test(step)) return `${testCase.feature} page loads successfully and displays the controls named in this test case.`;
   if (/\busername\b|\bemail\b/i.test(step) && /\benter\b/i.test(step)) return "The complete value is displayed in the target field without a validation message.";
   if (/\bpassword\b/i.test(step) && /\benter\b/i.test(step)) return "Every entered password character is masked and the field accepts the input.";
@@ -51,6 +91,9 @@ export function validateAzureTestCases(testCases: TestCase[]) {
   const titles = new Set<string>();
   testCases.forEach((testCase) => {
     const title = stripTitlePrefix(testCase.title);
+    if (documentHeadingPattern.test(title)) errors.push(`${testCase.id}: title must not use requirement document headings as product content.`);
+    if (documentHeadingPattern.test(testCase.feature)) errors.push(`${testCase.id}: feature must be an application feature, not a requirement document heading.`);
+    if (testCase.scenario && title.includes(testCase.scenario) && testCase.scenario.split(/\s+/).length > 10) errors.push(`${testCase.id}: title must not copy the full acceptance-criteria paragraph.`);
     if (/^\s*(?:POS|NEG|EDGE|VAL|TC|SEC|UI|A11Y|RESP|INT)-\d+/i.test(testCase.title)) errors.push(`${testCase.id}: remove the test-case prefix from the title.`);
     if (!/^Verify\b/.test(title)) errors.push(`${testCase.id}: title must start with "Verify".`);
     if (title.split(/\s+/).length < 8) errors.push(`${testCase.id}: title must be descriptive.`);
@@ -66,6 +109,9 @@ export function validateAzureTestCases(testCases: TestCase[]) {
       if (index > 0 && [row.workItemType, row.title, row.ac, row.priority, row.actions].some(Boolean)) errors.push(`${testCase.id}: continuation row ${index + 1} contains test-case-level data.`);
       if (index === 0 && (!row.workItemType || !row.title || !testCase.type || !row.ac || !row.priority)) errors.push(`${testCase.id}: first row is missing required test-case metadata.`);
       if (!isSpecificAction(row.stepAction)) errors.push(`${testCase.id}: step ${index + 1} must identify one concrete control, page, field, button, link, menu, or data condition.`);
+      if (documentHeadingAsControlPattern.test(row.stepAction)) errors.push(`${testCase.id}: step ${index + 1} must not use requirement document headings as controls or data.`);
+      if (documentHeadingPattern.test(row.stepExpected)) errors.push(`${testCase.id}: step ${index + 1} expected result must not use requirement document headings as the application subject.`);
+      if (/Sample\s+(?:Business Objective|Acceptance Criteria|Description|Requirement)/i.test(`${row.stepAction} ${row.stepExpected}`)) errors.push(`${testCase.id}: step ${index + 1} uses a sample value derived from a document heading.`);
       if (hasMultipleActions(row.stepAction)) errors.push(`${testCase.id}: step ${index + 1} combines multiple tester actions.`);
       if (hasVagueData(row.stepAction)) errors.push(`${testCase.id}: step ${index + 1} uses vague test data.`);
       if (isGenericExpected(row.stepExpected)) errors.push(`${testCase.id}: step ${index + 1} expected result must be measurable and tied to the action.`);
@@ -84,7 +130,7 @@ function stripTitlePrefix(value: string) {
 
 function isSpecificAction(value: string) {
   const action = value.replace(/^[=+\-@']+/, "");
-  return /^open\s+.+/i.test(action) || /\b(pages?|urls?|fields?|buttons?|menus?|links?|dropdowns?|checkboxes?|tables?|tabs?|dashboard|forms?|records?|messages?|username|password|email|amount|date|status|controls?|viewports?|data|values?|duplicate|request|response|validation|state|condition|permission|authorization|service)\b/i.test(action);
+  return /^open\s+.+/i.test(action) || /\b(pages?|urls?|fields?|buttons?|menus?|links?|dropdowns?|checkboxes?|tables?|tabs?|dashboard|forms?|records?|messages?|username|password|email|amount|date|status|controls?|viewports?|data|values?|duplicate|request|response|validation|state|condition|permission|authorization|service|radio-button|lookup|user group|employee profile|time & attendance|tna supervisor)\b/i.test(action);
 }
 
 function hasMultipleActions(value: string) {
@@ -97,7 +143,7 @@ function hasVagueData(value: string) {
 }
 
 function isGenericExpected(value: string) {
-  return /\b(system works correctly|input is accepted|application remains stable|tester can proceed|expected result is satisfied|observable response|behaves as expected|expected state is visible)\b/i.test(value);
+  return /\b(system works correctly|input is accepted|application remains stable|tester can proceed|expected result is satisfied|observable response|behaves as expected|expected state is visible|result tied to this action|produces the required result|details are accepted|field is available as per requirement|screen works correctly)\b/i.test(value);
 }
 
 function scoreTestCase(testCase: TestCase) {
