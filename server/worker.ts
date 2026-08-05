@@ -114,12 +114,20 @@ export default {
       }
 
       if (url.pathname.startsWith("/api/")) return json(fail("NOT_FOUND", "The requested API route does not exist."), 404);
-      return env.ASSETS.fetch(request);
+      return serveAsset(request, env);
     } catch (error) {
       return json(fail("REQUEST_FAILED", error instanceof Error ? error.message : "Unexpected server error."), 400);
     }
   }
 };
+
+async function serveAsset(request: Request, env: Env) {
+  const response = await env.ASSETS.fetch(request);
+  if (response.status !== 404) return response;
+  const url = new URL(request.url);
+  if (url.pathname.includes(".")) return response;
+  return env.ASSETS.fetch(new Request(new URL("/index.html", request.url), request));
+}
 
 function upsertGeneration(generation: Generation) {
   const index = generations.findIndex((item) => item.id === generation.id);
