@@ -128,6 +128,9 @@ p { margin: 0; }
 .detected-panel { border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 10px; background: #fff; }
 .detected-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
 .detected-card { border-radius: 8px; }
+.screenshot-report { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: #fafafa; }
+.screenshot-report summary { cursor: pointer; color: var(--violet); font-weight: 600; }
+.screenshot-report[open] summary { margin-bottom: 10px; }
 .table-wrap { width: 100%; overflow: auto; border: 1px solid var(--line); border-radius: 14px; }
 table { width: 100%; border-collapse: collapse; min-width: 1040px; background: #fff; }
 th { background: #f9fafb; text-align: left; color: #374151; font-size: 13px; }

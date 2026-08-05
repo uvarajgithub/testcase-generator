@@ -7,9 +7,35 @@ export type VisionSummary = {
   geminiVisionAnalysed: number;
   ocrAnalysed: number;
   failedScreenshots: number;
+  screenshotFindingsDetected: number;
+  screenshotFindingsUsed: number;
+  screenshotFindingsIgnored: number;
+  duplicateFindingsRemoved: number;
+  uniqueCoverageBehaviours: number;
+  plannedTestCases: number;
   generationMode: "Gemini Vision-assisted" | "OCR-assisted" | "Requirement text only";
   averageConfidence: number;
   warnings: string[];
+};
+export type ScreenshotAnalysisReport = {
+  screenshotId: string;
+  filename: string;
+  status: string;
+  mode: string;
+  screenshotType: string;
+  confidence: number;
+  rawExtractedText: string[];
+  detectedSections: string[];
+  detectedRoles: string[];
+  detectedEntities: string[];
+  detectedStates: string[];
+  detectedFields: string[];
+  detectedButtons: string[];
+  detectedBusinessRules: string[];
+  detectedUiRequirements: string[];
+  detectedDependencies: string[];
+  warnings: string[];
+  findings: Array<{ value: string; source: string; mode: string; confidence: number; usedInCoverage: boolean }>;
 };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -42,7 +68,7 @@ export const api = {
     form.append("additionalContext", options?.additionalContext ?? requirement.businessRules);
     form.append("userCorrections", options?.userCorrections ?? "");
     screenshots.forEach((file) => form.append("screenshots", file));
-    return request<{ criteria: AcceptanceCriterion[]; detectedElements: DetectedElement[]; warnings: string[]; assumptions: string[]; ambiguities: string[]; summary: VisionSummary }>("/api/screenshots/analyse", {
+    return request<{ criteria: AcceptanceCriterion[]; detectedElements: DetectedElement[]; warnings: string[]; assumptions: string[]; ambiguities: string[]; summary: VisionSummary; reports: ScreenshotAnalysisReport[] }>("/api/screenshots/analyse", {
       method: "POST",
       body: form
     });

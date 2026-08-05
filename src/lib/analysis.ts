@@ -414,10 +414,17 @@ export function generateCases(generation: Pick<Generation, "requirement" | "crit
     const extraCases = genericVariantCases(tnaGeneration).filter((testCase) => validateAzureTestCases([testCase]).length === 0);
     return renumberByType(removeDuplicates([...tnaSupervisorCases(tnaGeneration, model), ...extraCases])).slice(0, generation.config.maxCases);
   }
+  if (isRequestTypeText(`${generation.requirement.requirementTitle} ${generation.requirement.featureName} ${generation.requirement.acceptanceCriteria} ${generation.requirement.businessRules} ${generation.requirement.requirementDescription}`)) {
+    return requestTypeCases(generation).slice(0, generation.config.maxCases);
+  }
   if (isLoginText(`${generation.requirement.requirementTitle} ${generation.requirement.acceptanceCriteria} ${generation.requirement.featureName}`)) {
     return loginCases(generation).slice(0, generation.config.maxCases);
   }
   return renumberByType(removeDuplicates(genericVariantCases(generation))).slice(0, generation.config.maxCases);
+}
+
+function isRequestTypeText(value: string) {
+  return /\brequest types?\b/i.test(value) && /\bworkflow|ess request|active|inactive|configuration\b/i.test(value);
 }
 
 function genericVariantCases(generation: Pick<Generation, "requirement" | "criteria" | "detectedElements" | "config">): TestCase[] {
@@ -476,6 +483,222 @@ function expandedCriteriaForGeneration(requirement: RequirementInput, criteria: 
       if (parsed) byText.set(line.toLowerCase(), { ...parsed, id: `UIAC-${String(byText.size + 1).padStart(3, "0")}` });
     });
   return Array.from(byText.values());
+}
+
+function requestTypeCases(generation: Pick<Generation, "requirement" | "criteria" | "detectedElements" | "config">): TestCase[] {
+  const acId = generation.criteria[0]?.id ?? "AC-001";
+  const base = {
+    requirementId: generation.requirement.requirementId,
+    acceptanceCriteriaId: acId,
+    module: generation.requirement.moduleName || "ESS Request Module",
+    feature: "Request Type Configuration",
+    scenario: generation.requirement.acceptanceCriteria,
+    objective: "Verify request type configuration, workflow routing, availability, permissions, and dependency handling.",
+    preconditions: generation.requirement.preconditions || "An administrator can access Request Type Configuration and employee request workflows exist.",
+    postconditions: "Request type records, workflow routing, availability, and permission state remain consistent after execution.",
+    severity: "High" as const,
+    automationCandidate: "Yes" as const,
+    automationNotes: "Automate after stable selectors are confirmed for Request Type Name, Workflow, Status, Save, employee request list, and permission messages.",
+    screenshotReference: generation.detectedElements[0]?.screenshotName ?? "",
+    detectedUIElement: "Request Type Configuration page: Request Type Name field, Workflow field, Status dropdown, Save button",
+    assumptions: "Acceptance criteria remain the primary source. Screenshot findings are used only as supporting UI evidence.",
+    executionStatus: "Not Run" as const,
+    actualResult: "",
+    defectId: "",
+    testerComments: "",
+    inferred: false
+  };
+  const drafts: Array<Pick<TestCase, "type" | "title" | "testData" | "steps" | "expectedResult" | "priority" | "tags" | "automationCandidate">> = [
+    {
+      type: "Positive",
+      title: "Verify an administrator can create a Leave request type and link it to an active workflow",
+      testData: "Unique request type: Leave; active workflow: Leave Approval; status: Active.",
+      steps: ["Open the Request Type Configuration page.", "Click the New Request Type button.", "Enter Leave in the Request Type Name field.", "Select Leave Approval in the Workflow field.", "Select Active in the Status dropdown.", "Click the Save button on the Request Type Configuration page."],
+      expectedResult: "The Leave request type is saved with the Leave Approval workflow and Active status.",
+      priority: "High",
+      tags: ["creation", "workflow-linkage", acId],
+      automationCandidate: "Yes"
+    },
+    {
+      type: "Validation",
+      title: "Verify request type creation is blocked when the request type name is missing",
+      testData: "Request Type Name empty; active workflow selected.",
+      steps: ["Open the Request Type Configuration page.", "Click the New Request Type button.", "Leave the Request Type Name field empty.", "Select Leave Approval in the Workflow field.", "Click the Save button on the Request Type Configuration page."],
+      expectedResult: "A required-field message is displayed for Request Type Name and no request type is created.",
+      priority: "Medium",
+      tags: ["validation", "required-name", acId],
+      automationCandidate: "Yes"
+    },
+    {
+      type: "Validation",
+      title: "Verify request type creation is blocked when the workflow field is missing",
+      testData: "Request type name: Loan; Workflow field empty.",
+      steps: ["Open the Request Type Configuration page.", "Click the New Request Type button.", "Enter Loan in the Request Type Name field.", "Leave the Workflow field empty.", "Click the Save button on the Request Type Configuration page."],
+      expectedResult: "A required-field message is displayed for Workflow and no request type is created.",
+      priority: "Medium",
+      tags: ["validation", "required-workflow", acId],
+      automationCandidate: "Yes"
+    },
+    {
+      type: "Negative",
+      title: "Verify duplicate request type names are rejected during configuration",
+      testData: "Existing request type: Leave; duplicate request type name: Leave.",
+      steps: ["Open the Request Type Configuration page.", "Click the New Request Type button.", "Enter Leave in the Request Type Name field.", "Select Leave Approval in the Workflow field.", "Click the Save button on the Request Type Configuration page."],
+      expectedResult: "A duplicate-name message is displayed and no second Leave request type is created.",
+      priority: "Medium",
+      tags: ["negative", "duplicate", acId],
+      automationCandidate: "Yes"
+    },
+    {
+      type: "Negative",
+      title: "Verify invalid workflow selection is rejected for a request type",
+      testData: "Request type: Expense; inactive or invalid workflow selected.",
+      steps: ["Open the Request Type Configuration page.", "Click the New Request Type button.", "Enter Expense in the Request Type Name field.", "Select Inactive Expense Workflow in the Workflow field.", "Click the Save button on the Request Type Configuration page."],
+      expectedResult: "A workflow validation message is displayed and the Expense request type is not saved with an invalid workflow.",
+      priority: "Medium",
+      tags: ["negative", "invalid-workflow", acId],
+      automationCandidate: "Yes"
+    },
+    ...["Leave", "Loan", "Expense", "Travel", "Document"].map((requestType) => ({
+      type: "Positive" as const,
+      title: `Verify ${requestType} requests route through the workflow linked to the ${requestType} request type`,
+      testData: `${requestType} request type linked to ${requestType} Approval workflow.`,
+      steps: ["Open the employee request list.", `Select ${requestType} from the employee request type list.`, `Select ${requestType} Approval in the Workflow field.`, "Click the Save button on the Request Type Configuration page."],
+      expectedResult: `The ${requestType} request follows the ${requestType} Approval workflow linked to its request type.`,
+      priority: "High" as const,
+      tags: ["routing", requestType.toLowerCase(), acId],
+      automationCandidate: "Yes" as const
+    })),
+    {
+      type: "Negative",
+      title: "Verify one request type does not use another request type workflow",
+      testData: "Leave request type linked to Leave Approval; Loan request type linked to Loan Approval.",
+      steps: ["Open the employee request list.", "Select Leave from the employee request type list.", "Select Loan Approval in the Workflow field.", "Click the Save button on the Request Type Configuration page."],
+      expectedResult: "A workflow mismatch message is displayed and the Leave request does not route through Loan Approval.",
+      priority: "High",
+      tags: ["routing", "workflow-mismatch", acId],
+      automationCandidate: "Yes"
+    },
+    {
+      type: "Edge",
+      title: "Verify updated workflow linkage affects only future requests",
+      testData: "Existing Leave request type changed from Leave Approval V1 to Leave Approval V2.",
+      steps: ["Open an existing Leave request type record.", "Select Leave Approval V2 in the Workflow field.", "Click the Save button on the Request Type Configuration page.", "Open the employee request list.", "Select Leave from the employee request type list."],
+      expectedResult: "New Leave requests use Leave Approval V2 while existing submitted Leave requests remain accessible.",
+      priority: "Medium",
+      tags: ["edge", "workflow-update", acId],
+      automationCandidate: "Yes"
+    },
+    {
+      type: "Positive",
+      title: "Verify active request types appear when an employee opens the request list",
+      testData: "Leave and Loan request types saved with Active status.",
+      steps: ["Open the Request Type Configuration page.", "Open an existing Leave request type record.", "Select Active in the Status dropdown.", "Open the employee request list.", "Select Leave from the employee request type list."],
+      expectedResult: "Leave and Loan appear as available active request types in the employee request list.",
+      priority: "High",
+      tags: ["availability", "active", acId],
+      automationCandidate: "Yes"
+    },
+    {
+      type: "Negative",
+      title: "Verify inactive request types are hidden when an employee opens the request list",
+      testData: "Travel request type saved with Inactive status.",
+      steps: ["Open an existing Travel request type record.", "Select Inactive in the Status dropdown.", "Click the Save button on the Request Type Configuration page.", "Open the employee request list."],
+      expectedResult: "Travel is not displayed as an available request type in the employee request list.",
+      priority: "High",
+      tags: ["availability", "inactive", acId],
+      automationCandidate: "Yes"
+    },
+    {
+      type: "Edge",
+      title: "Verify active-to-inactive transition removes a request type from future employee requests",
+      testData: "Document request type initially Active.",
+      steps: ["Open an existing Document request type record.", "Change the Status dropdown from Active to Inactive.", "Click the Save button on the Request Type Configuration page.", "Open the employee request list."],
+      expectedResult: "Document is removed from future employee request options after the inactive status is saved.",
+      priority: "Medium",
+      tags: ["state-transition", "active-to-inactive", acId],
+      automationCandidate: "Yes"
+    },
+    {
+      type: "Edge",
+      title: "Verify inactive-to-active transition restores a request type to employee request options",
+      testData: "Expense request type initially Inactive.",
+      steps: ["Open an existing Expense request type record.", "Change the Status dropdown from Inactive to Active.", "Click the Save button on the Request Type Configuration page.", "Open the employee request list."],
+      expectedResult: "Expense appears in future employee request options after the active status is saved.",
+      priority: "Medium",
+      tags: ["state-transition", "inactive-to-active", acId],
+      automationCandidate: "Yes"
+    },
+    {
+      type: "Security",
+      title: "Verify direct access to an inactive request type is blocked for employees",
+      testData: "Inactive Travel request type URL.",
+      steps: ["Open the inactive request type URL directly.", "Open the employee request list.", "Select Travel from the employee request type list."],
+      expectedResult: "The inactive Travel request type is blocked or unavailable and no new employee request is created.",
+      priority: "High",
+      tags: ["security", "direct-access", acId],
+      automationCandidate: "Yes"
+    },
+    {
+      type: "Security",
+      title: "Verify a user without configuration rights cannot access Request Type Configuration",
+      testData: "Employee user without request-type configuration permission.",
+      steps: ["Sign in as a user without request type configuration permission.", "Open the protected Request Type Configuration page."],
+      expectedResult: "A permission-denied message is displayed and configuration controls are not available.",
+      priority: "High",
+      tags: ["permission", "access-denied", acId],
+      automationCandidate: "Yes"
+    },
+    {
+      type: "Security",
+      title: "Verify a user without configuration rights cannot create a request type",
+      testData: "Employee user without create permission; attempted request type: Travel.",
+      steps: ["Sign in as a user without request type configuration permission.", "Open the protected Request Type Configuration page.", "Attempt to create a request type through the backend API."],
+      expectedResult: "The backend rejects the unauthorized create request and no Travel request type is created.",
+      priority: "High",
+      tags: ["security", "backend-bypass", acId],
+      automationCandidate: "Yes"
+    },
+    {
+      type: "Integration",
+      title: "Verify Workflow Engine unavailability prevents orphaned request type records",
+      testData: "Workflow Engine unavailable during request type save.",
+      steps: ["Open the Request Type Configuration page.", "Click the New Request Type button.", "Enter Travel in the Request Type Name field.", "Select Travel Approval in the Workflow field.", "Simulate Workflow Engine unavailable condition.", "Click the Save button on the Request Type Configuration page."],
+      expectedResult: "A Workflow Engine unavailable message is displayed and no orphaned Travel request type record is created.",
+      priority: "High",
+      tags: ["integration", "workflow-engine", acId],
+      automationCandidate: "Yes"
+    },
+    {
+      type: "Integration",
+      title: "Verify ESS Request Module unavailability is handled during employee request creation",
+      testData: "ESS Request Module unavailable during employee request creation.",
+      steps: ["Open the employee request list.", "Select Expense from the employee request type list.", "Simulate ESS Request Module unavailable condition."],
+      expectedResult: "An ESS Request Module unavailable message is displayed and no incomplete employee request is created.",
+      priority: "High",
+      tags: ["integration", "ess-request-module", acId],
+      automationCandidate: "Yes"
+    }
+  ];
+  const wanted = new Set(generation.config.selectedTypes);
+  const counts: Partial<Record<TestCase["type"], number>> = {};
+  const cases = drafts.filter((draft) => wanted.has(draft.type)).map((draft) => {
+    counts[draft.type] = (counts[draft.type] ?? 0) + 1;
+    return {
+      ...base,
+      id: `${typePrefix(draft.type)}-${String(counts[draft.type]).padStart(3, "0")}`,
+      type: draft.type,
+      title: draft.title,
+      testData: generation.config.includeTestData ? draft.testData : "",
+      steps: draft.steps,
+      expectedResult: generation.config.includeExpectedResults ? draft.expectedResult : "",
+      priority: draft.priority,
+      severity: draft.priority,
+      automationCandidate: draft.automationCandidate,
+      tags: draft.tags
+    };
+  });
+  return cases.filter((testCase) => validateAzureTestCases([testCase]).length === 0);
 }
 
 function splitScenarioClauses(value: string) {

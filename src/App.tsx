@@ -2,7 +2,7 @@ import { AlertCircle, Check, Copy, Edit3, ExternalLink, FileSpreadsheet, Filter,
 import { useEffect, useRef, useState } from "react";
 import { Shell } from "./components/Shell";
 import { Field } from "./components/Field";
-import { api, type VisionSummary } from "./lib/api";
+import { api, type ScreenshotAnalysisReport, type VisionSummary } from "./lib/api";
 import { calculateCoverage, inferRequirementModel, isDocumentHeading, normalizeRequirementText } from "./lib/analysis";
 import { azureCaseRows, validateAzureTestCases } from "./lib/format";
 import { generationConfigSchema, priorities, testTypes, type CoverageSummary, type Generation, type GenerationConfig, type RequirementInput, type TestCase } from "./lib/schemas";
@@ -55,6 +55,7 @@ export function App() {
   const [screenshotFiles, setScreenshotFiles] = useState<Record<string, File>>({});
   const [detectedElements, setDetectedElements] = useState<Generation["detectedElements"]>([]);
   const [visionSummary, setVisionSummary] = useState<VisionSummary | null>(null);
+  const [screenshotReports, setScreenshotReports] = useState<ScreenshotAnalysisReport[]>([]);
   const [ignoreScreenshotData, setIgnoreScreenshotData] = useState(false);
   const generatingRef = useRef(false);
 
@@ -97,6 +98,7 @@ export function App() {
       setScreenshotFiles((prev) => ({ ...prev, ...Object.fromEntries(data.screenshots.map((shot, index) => [shot.id, selected[index]])) }));
       setDetectedElements([]);
       setVisionSummary(null);
+      setScreenshotReports([]);
       setIgnoreScreenshotData(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Screenshot upload failed. Check file type and size.");
@@ -168,6 +170,7 @@ export function App() {
       const analysis = await api.analyzeScreenshots(prepared, files);
       setDetectedElements(analysis.detectedElements);
       setVisionSummary(analysis.summary);
+      setScreenshotReports(analysis.reports);
       setMessage(`${analysis.summary.generationMode}: ${analysis.detectedElements.length} detected elements ready for review.`);
       return analysis;
     } catch (err) {
@@ -263,6 +266,7 @@ export function App() {
             detectedElements={detectedElements}
             setDetectedElements={setDetectedElements}
             visionSummary={visionSummary}
+            reports={screenshotReports}
             ignoreScreenshotData={ignoreScreenshotData}
             setIgnoreScreenshotData={setIgnoreScreenshotData}
             config={config}
@@ -299,6 +303,7 @@ function GenerateTab(props: {
   detectedElements: Generation["detectedElements"];
   setDetectedElements: (items: Generation["detectedElements"]) => void;
   visionSummary: VisionSummary | null;
+  reports: ScreenshotAnalysisReport[];
   ignoreScreenshotData: boolean;
   setIgnoreScreenshotData: (value: boolean) => void;
   config: GenerationConfig;
@@ -308,7 +313,7 @@ function GenerateTab(props: {
   busy: string;
   progress: string[];
 }) {
-  const { requirement, setRequirement, requirementFiles, setRequirementFiles, uploadRequirementFiles, screenshots, setScreenshots, uploadScreenshots, analyseUploadedScreenshots, detectedElements, setDetectedElements, visionSummary, ignoreScreenshotData, setIgnoreScreenshotData, config, setConfig, generate, refineExistingExcel, busy, progress } = props;
+  const { requirement, setRequirement, requirementFiles, setRequirementFiles, uploadRequirementFiles, screenshots, setScreenshots, uploadScreenshots, analyseUploadedScreenshots, detectedElements, setDetectedElements, visionSummary, reports, ignoreScreenshotData, setIgnoreScreenshotData, config, setConfig, generate, refineExistingExcel, busy, progress } = props;
   const [sourceMode, setSourceMode] = useState<"Manual Entry" | "Upload Requirement">("Manual Entry");
   const [existingCaseFile, setExistingCaseFile] = useState<File | null>(null);
   const update = (key: keyof RequirementInput, value: string) => setRequirement({ ...requirement, [key]: value });
@@ -395,6 +400,7 @@ function GenerateTab(props: {
             elements={detectedElements}
             setElements={setDetectedElements}
             summary={visionSummary}
+            reports={reports}
             onAnalyse={analyseUploadedScreenshots}
             busy={busy}
             ignore={ignoreScreenshotData}
@@ -543,10 +549,11 @@ function CoverageTab({ generation, coverage, exportExcel, openHtml, azureConfig,
   );
 }
 
-function DetectedElementsReview({ elements, setElements, summary, onAnalyse, busy, ignore, setIgnore }: {
+function DetectedElementsReview({ elements, setElements, summary, reports, onAnalyse, busy, ignore, setIgnore }: {
   elements: Generation["detectedElements"];
   setElements: (items: Generation["detectedElements"]) => void;
   summary: VisionSummary | null;
+  reports: ScreenshotAnalysisReport[];
   onAnalyse: () => void;
   busy: string;
   ignore: boolean;
@@ -587,9 +594,37 @@ function DetectedElementsReview({ elements, setElements, summary, onAnalyse, bus
           <Chip label="OCR" value={summary.ocrAnalysed} />
           <Chip label="Failed" value={summary.failedScreenshots} />
           <Chip label="Confidence" value={`${summary.averageConfidence}%`} />
+          <Chip label="Findings used" value={summary.screenshotFindingsUsed} />
+          <Chip label="Findings ignored" value={summary.screenshotFindingsIgnored} />
+          <Chip label="Unique behaviours" value={summary.uniqueCoverageBehaviours} />
+          <Chip label="Planned cases" value={summary.plannedTestCases} />
         </div>
       )}
       {summary?.warnings.map((warning) => <Notice key={warning} type={summary.generationMode === "Gemini Vision-assisted" ? "info" : "warn"} text={warning} />)}
+      {reports.length > 0 && (
+        <details className="screenshot-report">
+          <summary>View extracted screenshot data</summary>
+          <div className="detected-grid">
+            {reports.map((report) => (
+              <article className="mini-card detected-card" key={report.screenshotId}>
+                <strong>{report.filename}</strong>
+                <div className="summary-chips">
+                  <span className="summary-chip"><strong>{report.status}</strong>Status</span>
+                  <span className="summary-chip"><strong>{report.mode}</strong>Mode</span>
+                  <span className="summary-chip"><strong>{report.screenshotType}</strong>Type</span>
+                  <span className="summary-chip"><strong>{report.confidence}%</strong>Confidence</span>
+                </div>
+                <TraceList title="Raw extracted text" items={report.rawExtractedText.length ? report.rawExtractedText : ["None"]} />
+                <TraceList title="Fields" items={report.detectedFields.length ? report.detectedFields : ["None"]} />
+                <TraceList title="Buttons" items={report.detectedButtons.length ? report.detectedButtons : ["None"]} />
+                <TraceList title="Roles, states, dependencies" items={[...report.detectedRoles, ...report.detectedStates, ...report.detectedDependencies].length ? [...report.detectedRoles, ...report.detectedStates, ...report.detectedDependencies] : ["None"]} />
+                <TraceList title="Findings used in coverage" items={report.findings.length ? report.findings.map((finding) => `${finding.value} (${finding.confidence}%, ${finding.usedInCoverage ? "used" : "not used"})`) : ["None"]} />
+                {report.warnings.map((warning) => <Notice key={warning} type="warn" text={warning} />)}
+              </article>
+            ))}
+          </div>
+        </details>
+      )}
       {elements.length ? (
         <div className="detected-grid">
           {elements.map((element) => (

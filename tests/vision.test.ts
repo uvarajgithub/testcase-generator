@@ -55,6 +55,8 @@ describe("Gemini Vision analysis", () => {
       fetchImpl
     });
     expect(result.summary.generationMode).toBe("Gemini Vision-assisted");
+    expect(result.reports[0].status).toBe("Vision analysed");
+    expect(result.reports[0].findings.some((finding) => finding.value.includes("TNA Supervisor") && finding.usedInCoverage)).toBe(true);
     expect(result.detectedElements.map((item) => item.label)).toContain("TNA Supervisor");
     expect(result.detectedElements.map((item) => item.label)).toContain("Save");
     expect(result.detectedElements.map((item) => item.label)).not.toContain("Business Objective");

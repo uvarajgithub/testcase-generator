@@ -130,4 +130,49 @@ Employees assigned to a supervisor become that supervisor's direct reports.`,
     expect(cases.length).toBeGreaterThan(9);
     expect(validateAzureTestCases(cases)).toEqual([]);
   });
+
+  it("generates broad request-type workflow coverage without being limited by screenshot count", () => {
+    const requestTypeRequirement: RequirementInput = {
+      projectName: "ESS",
+      moduleName: "Request Management",
+      featureName: "Request Type Configuration",
+      requirementId: "REQ-RT",
+      requirementTitle: "Configure request types and workflows",
+      requirementDescription: "Administrators configure request types such as Leave, Loan, Expense, Travel, and Document and link each request type to the correct workflow.",
+      acceptanceCriteria: `Administrators can create request types and link each request type to an active workflow.
+Employees can see only active request types when creating a request.
+Inactive request types must not be available for new employee requests.
+Each request type must route through its own linked workflow.
+Only users with request type configuration permission can create or update request types.
+Workflow Engine and ESS Request Module failures must be handled without creating incomplete records.`,
+      businessRules: "Request type name and workflow are mandatory. Duplicate request type names are not allowed.",
+      preconditions: "Administrator and employee users exist.",
+      userRole: "Administrator",
+      platform: "Web",
+      priority: "High",
+      additionalNotes: ""
+    };
+    const criteria = parseAcceptanceCriteria(requestTypeRequirement.acceptanceCriteria);
+    const detectedElements = inferElementsFromRequirement(requestTypeRequirement, [
+      { id: "SS-001", filename: "request-type-configuration.png" },
+      { id: "SS-002", filename: "employee-request-list.png" },
+      { id: "SS-003", filename: "workflow-engine-error.png" }
+    ]);
+    const draft = {
+      ...generation(),
+      requirement: requestTypeRequirement,
+      criteria,
+      detectedElements
+    };
+
+    const cases = generateCases(draft);
+    const titles = cases.map((testCase) => testCase.title).join("\n");
+
+    expect(cases.length).toBeGreaterThan(15);
+    expect(titles).toContain("Verify active request types appear when an employee opens the request list");
+    expect(titles).toContain("Verify inactive request types are hidden when an employee opens the request list");
+    expect(titles).toContain("Verify Workflow Engine unavailability prevents orphaned request type records");
+    expect(titles).toContain("Verify a user without configuration rights cannot create a request type");
+    expect(validateAzureTestCases(cases)).toEqual([]);
+  });
 });

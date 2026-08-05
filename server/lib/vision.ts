@@ -23,9 +23,36 @@ export type VisionSummary = {
   geminiVisionAnalysed: number;
   ocrAnalysed: number;
   failedScreenshots: number;
+  screenshotFindingsDetected: number;
+  screenshotFindingsUsed: number;
+  screenshotFindingsIgnored: number;
+  duplicateFindingsRemoved: number;
+  uniqueCoverageBehaviours: number;
+  plannedTestCases: number;
   generationMode: "Gemini Vision-assisted" | "OCR-assisted" | "Requirement text only";
   averageConfidence: number;
   warnings: string[];
+};
+
+export type ScreenshotAnalysisReport = {
+  screenshotId: string;
+  filename: string;
+  status: "Waiting for analysis" | "Vision analysed" | "OCR analysed" | "Analysis failed" | "Reference only" | "Low-quality image";
+  mode: "gemini-vision" | "ocr-fallback" | "requirement-text-only";
+  screenshotType: string;
+  confidence: number;
+  rawExtractedText: string[];
+  detectedSections: string[];
+  detectedRoles: string[];
+  detectedEntities: string[];
+  detectedStates: string[];
+  detectedFields: string[];
+  detectedButtons: string[];
+  detectedBusinessRules: string[];
+  detectedUiRequirements: string[];
+  detectedDependencies: string[];
+  warnings: string[];
+  findings: Array<{ value: string; source: string; mode: string; confidence: number; usedInCoverage: boolean }>;
 };
 
 export type ScreenshotAnalysisResponse = {
@@ -35,6 +62,7 @@ export type ScreenshotAnalysisResponse = {
   assumptions: string[];
   ambiguities: string[];
   summary: VisionSummary;
+  reports: ScreenshotAnalysisReport[];
 };
 
 const allowedMimeTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
@@ -58,10 +86,16 @@ const visionResultSchema = z.object({
   screenName: z.string().default(""),
   navigation: z.array(z.string()).default([]),
   controls: z.array(visionControlSchema).default([]),
+  sections: z.array(z.string()).default([]),
+  roles: z.array(z.string()).default([]),
+  entities: z.array(z.string()).default([]),
+  states: z.array(z.string()).default([]),
   visibleText: z.array(z.string()).default([]),
   validationMessages: z.array(z.string()).default([]),
   tables: z.array(z.object({ name: z.string().default(""), headers: z.array(z.string()).default([]) })).default([]),
   businessRules: z.array(z.string()).default([]),
+  uiRequirements: z.array(z.string()).default([]),
+  dependencies: z.array(z.string()).default([]),
   warnings: z.array(z.string()).default([]),
   overallConfidence: z.number().min(0).max(1).default(0)
 });
@@ -106,6 +140,7 @@ export async function analyseScreenshots(input: {
   const assumptions: string[] = [];
   const reliableVision: VisionResult[] = [];
   const ocrResults: VisionResult[] = [];
+  const reports: ScreenshotAnalysisReport[] = [];
   let failedScreenshots = 0;
 
   for (const screenshot of input.screenshots) {
@@ -115,6 +150,7 @@ export async function analyseScreenshots(input: {
       : { result: null, warning: "Gemini Vision is not configured." };
     if (vision.result && isReliableVisionResult(vision.result)) {
       reliableVision.push(vision.result);
+      reports.push(resultToReport(vision.result, screenshot, "Vision analysed", "gemini-vision", true));
       continue;
     }
     if (vision.warning) warnings.push(vision.warning);
@@ -122,8 +158,12 @@ export async function analyseScreenshots(input: {
       const ocr = tryLocalOcr(requirement, screenshot);
       if (isReliableVisionResult(ocr)) {
         ocrResults.push(ocr);
+        reports.push(resultToReport(ocr, screenshot, "OCR analysed", "ocr-fallback", true));
         continue;
       }
+      reports.push(resultToReport(ocr, screenshot, "Low-quality image", "ocr-fallback", false));
+    } else {
+      reports.push(emptyReport(screenshot, "Analysis failed", "requirement-text-only", vision.warning ? [vision.warning] : []));
     }
     failedScreenshots += 1;
   }
@@ -144,8 +184,11 @@ export async function analyseScreenshots(input: {
   const fallbackElements = inferElementsFromRequirement(requirement, screenshotRefs);
   const detectedElements = usedResults.length ? resultsToDetectedElements(usedResults, input.screenshots, requirement) : fallbackElements;
   const validatedElements = detectedElements.map((item) => detectedElementSchema.parse(item));
+  const duplicateFindingsRemoved = Math.max(0, detectedElements.length - new Set(validatedElements.map((item) => `${item.label.toLowerCase()}:${item.type.toLowerCase()}`)).size);
   assumptions.push(...validatedElements.map((item) => item.assumption).filter(Boolean));
   const averageConfidence = usedResults.length ? Math.round((usedResults.reduce((sum, item) => sum + item.overallConfidence, 0) / usedResults.length) * 100) : 0;
+  const screenshotFindingsUsed = validatedElements.filter((item) => item.confidence >= lowConfidenceThreshold).length;
+  const uniqueCoverageBehaviours = Math.max(criteria.length, screenshotFindingsUsed);
 
   return {
     criteria,
@@ -159,10 +202,17 @@ export async function analyseScreenshots(input: {
       geminiVisionAnalysed: reliableVision.length,
       ocrAnalysed: reliableVision.length ? 0 : ocrResults.length,
       failedScreenshots,
+      screenshotFindingsDetected: validatedElements.length,
+      screenshotFindingsUsed,
+      screenshotFindingsIgnored: Math.max(0, validatedElements.length - screenshotFindingsUsed),
+      duplicateFindingsRemoved,
+      uniqueCoverageBehaviours,
+      plannedTestCases: uniqueCoverageBehaviours,
       generationMode: mode,
       averageConfidence,
       warnings
-    }
+    },
+    reports
   };
 }
 
@@ -253,10 +303,16 @@ function tryLocalOcr(requirement: RequirementInput, screenshot: ScreenshotInput)
     screenName: /new user group/i.test(source) ? "New User Group" : requirement.featureName,
     navigation: /user groups/i.test(source) ? ["User Groups", "New User Group"] : [requirement.moduleName, requirement.featureName].filter(Boolean),
     controls,
-    visibleText: [],
+    sections: [],
+    roles: Array.from(source.matchAll(/\b(Admin|Administrator|Employee|User without rights|Customer|Manager)\b/gi)).map((match) => match[1]),
+    entities: Array.from(source.matchAll(/\b(Leave|Loan|Expense|Travel|Document|Request Type|Workflow Engine|ESS Request Module)\b/gi)).map((match) => match[1]),
+    states: Array.from(source.matchAll(/\b(Active|Inactive|Enabled|Disabled)\b/gi)).map((match) => match[1]),
+    visibleText: controls.map((control) => control.label),
     validationMessages: [],
     tables: [],
     businessRules: [],
+    uiRequirements: [],
+    dependencies: Array.from(source.matchAll(/\b(Workflow Engine|ESS Request Module|gateway|service|api)\b/gi)).map((match) => match[1]),
     warnings: ["Local OCR fallback uses extracted text hints and requirement context; review detected elements before generation."],
     overallConfidence: controls.length ? 0.66 : 0.2
   };
@@ -309,6 +365,64 @@ function resultsToDetectedElements(results: VisionResult[], screenshots: Screens
   });
 }
 
+function resultToReport(result: VisionResult, screenshot: ScreenshotInput, status: ScreenshotAnalysisReport["status"], mode: ScreenshotAnalysisReport["mode"], usedInCoverage: boolean): ScreenshotAnalysisReport {
+  const findings = [
+    ...result.controls.map((control) => ({ value: `${control.label}${control.options.length ? ` (${control.options.join(", ")})` : ""}`, confidence: control.confidence })),
+    ...result.businessRules.map((value) => ({ value, confidence: result.overallConfidence })),
+    ...result.uiRequirements.map((value) => ({ value, confidence: result.overallConfidence })),
+    ...result.dependencies.map((value) => ({ value, confidence: result.overallConfidence }))
+  ];
+  return {
+    screenshotId: screenshot.id,
+    filename: screenshot.filename,
+    status,
+    mode,
+    screenshotType: result.screenshotType,
+    confidence: Math.round(result.overallConfidence * 100),
+    rawExtractedText: result.visibleText,
+    detectedSections: result.sections,
+    detectedRoles: result.roles,
+    detectedEntities: result.entities,
+    detectedStates: result.states,
+    detectedFields: result.controls.filter((control) => /field|input|dropdown|radio|checkbox|lookup/i.test(control.type)).map((control) => control.label),
+    detectedButtons: result.controls.filter((control) => /button|link/i.test(control.type)).map((control) => control.label),
+    detectedBusinessRules: result.businessRules,
+    detectedUiRequirements: result.uiRequirements,
+    detectedDependencies: result.dependencies,
+    warnings: result.warnings,
+    findings: findings.map((finding) => ({
+      value: finding.value,
+      source: screenshot.id,
+      mode,
+      confidence: Math.round(finding.confidence * 100),
+      usedInCoverage: usedInCoverage && finding.confidence >= lowConfidenceThreshold
+    }))
+  };
+}
+
+function emptyReport(screenshot: ScreenshotInput, status: ScreenshotAnalysisReport["status"], mode: ScreenshotAnalysisReport["mode"], warnings: string[]): ScreenshotAnalysisReport {
+  return {
+    screenshotId: screenshot.id,
+    filename: screenshot.filename,
+    status,
+    mode,
+    screenshotType: "unknown",
+    confidence: 0,
+    rawExtractedText: [],
+    detectedSections: [],
+    detectedRoles: [],
+    detectedEntities: [],
+    detectedStates: [],
+    detectedFields: [],
+    detectedButtons: [],
+    detectedBusinessRules: [],
+    detectedUiRequirements: [],
+    detectedDependencies: [],
+    warnings,
+    findings: []
+  };
+}
+
 function visionPrompt(requirement: RequirementInput, userStory = "", additionalContext = "", userCorrections = "") {
   return `You are analysing screenshots for software test-case generation.
 
@@ -318,7 +432,7 @@ For application screens, identify screen name, navigation, field labels, control
 
 For requirement-document, Azure/Jira, Excel-output, or document screenshots, do not treat headings such as Business Objective, Acceptance Criteria, Description, Test Step, Step Action, Step Expected, Work Item Type, State, Assigned To, or Area Path as application controls.
 
-Return JSON only with this shape: analysisMode, screenshotType, screenName, navigation, controls, visibleText, validationMessages, tables, businessRules, warnings, overallConfidence.
+Return JSON only with this shape: analysisMode, screenshotType, screenName, navigation, sections, roles, entities, states, controls, visibleText, validationMessages, tables, businessRules, uiRequirements, dependencies, warnings, overallConfidence.
 Do not invent controls. When uncertain, reduce confidence and add warnings.
 
 Acceptance criteria:
