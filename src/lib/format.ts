@@ -16,20 +16,29 @@ export type AzureCaseRow = {
 };
 
 export function azureCaseRows(testCase: TestCase): AzureCaseRow[] {
-  return testCase.steps.map((step, index) => {
-    const isFirstStep = index === 0;
-    return {
-      id: "",
-      workItemType: isFirstStep ? "Test Case" : "",
-      title: isFirstStep ? stripTitlePrefix(testCase.title) : "",
-      testStep: index + 1,
-      stepAction: step,
-      stepExpected: stepExpected(testCase, index),
-      ac: isFirstStep ? testCase.acceptanceCriteriaId : "",
-      priority: isFirstStep ? testCase.priority : "",
-      actions: ""
-    };
-  });
+  const metadataRow: AzureCaseRow = {
+    id: "",
+    workItemType: "Test Case",
+    title: stripTitlePrefix(testCase.title),
+    testStep: "",
+    stepAction: "",
+    stepExpected: "",
+    ac: testCase.acceptanceCriteriaId,
+    priority: testCase.priority,
+    actions: ""
+  };
+  const stepRows = testCase.steps.map((step, index) => ({
+    id: "",
+    workItemType: "",
+    title: "",
+    testStep: index + 1,
+    stepAction: step,
+    stepExpected: stepExpected(testCase, index),
+    ac: "",
+    priority: "",
+    actions: ""
+  }));
+  return [metadataRow, ...stepRows];
 }
 
 export function stepExpected(testCase: TestCase, stepIndex: number) {
@@ -102,19 +111,23 @@ export function validateAzureTestCases(testCases: TestCase[]) {
     if (!testCase.steps.length) errors.push(`${testCase.id}: add at least one executable test step.`);
     azureCaseRows(testCase).forEach((row, index) => {
       if (row.id !== "") errors.push(`${testCase.id}: Azure ID column must be blank.`);
+      if (index === 0) {
+        if (row.testStep !== "" || row.stepAction !== "" || row.stepExpected !== "") errors.push(`${testCase.id}: metadata row must leave Test Step, Step Action, and Step Expected blank.`);
+        if (!row.workItemType || !row.title || !testCase.type || !row.ac || !row.priority) errors.push(`${testCase.id}: first row is missing required test-case metadata.`);
+        return;
+      }
       if (typeof row.testStep !== "number") errors.push(`${testCase.id}: Test Step must be numeric.`);
-      if (row.testStep !== index + 1) errors.push(`${testCase.id}: test steps must be sequential from 1.`);
-      if (!row.stepAction.trim()) errors.push(`${testCase.id}: Step Action is required for step ${index + 1}.`);
-      if (!row.stepExpected.trim()) errors.push(`${testCase.id}: Step Expected is required for step ${index + 1}.`);
-      if (index > 0 && [row.workItemType, row.title, row.ac, row.priority, row.actions].some(Boolean)) errors.push(`${testCase.id}: continuation row ${index + 1} contains test-case-level data.`);
-      if (index === 0 && (!row.workItemType || !row.title || !testCase.type || !row.ac || !row.priority)) errors.push(`${testCase.id}: first row is missing required test-case metadata.`);
-      if (!isSpecificAction(row.stepAction)) errors.push(`${testCase.id}: step ${index + 1} must identify one concrete control, page, field, button, link, menu, or data condition.`);
-      if (documentHeadingAsControlPattern.test(row.stepAction)) errors.push(`${testCase.id}: step ${index + 1} must not use requirement document headings as controls or data.`);
-      if (documentHeadingPattern.test(row.stepExpected)) errors.push(`${testCase.id}: step ${index + 1} expected result must not use requirement document headings as the application subject.`);
-      if (/Sample\s+(?:Business Objective|Acceptance Criteria|Description|Requirement)/i.test(`${row.stepAction} ${row.stepExpected}`)) errors.push(`${testCase.id}: step ${index + 1} uses a sample value derived from a document heading.`);
-      if (hasMultipleActions(row.stepAction)) errors.push(`${testCase.id}: step ${index + 1} combines multiple tester actions.`);
-      if (hasVagueData(row.stepAction)) errors.push(`${testCase.id}: step ${index + 1} uses vague test data.`);
-      if (isGenericExpected(row.stepExpected)) errors.push(`${testCase.id}: step ${index + 1} expected result must be measurable and tied to the action.`);
+      if (row.testStep !== index) errors.push(`${testCase.id}: test steps must be sequential from 1.`);
+      if (!row.stepAction.trim()) errors.push(`${testCase.id}: Step Action is required for step ${index}.`);
+      if (!row.stepExpected.trim()) errors.push(`${testCase.id}: Step Expected is required for step ${index}.`);
+      if ([row.workItemType, row.title, row.ac, row.priority, row.actions].some(Boolean)) errors.push(`${testCase.id}: continuation row ${index + 1} contains test-case-level data.`);
+      if (!isSpecificAction(row.stepAction)) errors.push(`${testCase.id}: step ${index} must identify one concrete control, page, field, button, link, menu, or data condition.`);
+      if (documentHeadingAsControlPattern.test(row.stepAction)) errors.push(`${testCase.id}: step ${index} must not use requirement document headings as controls or data.`);
+      if (documentHeadingPattern.test(row.stepExpected)) errors.push(`${testCase.id}: step ${index} expected result must not use requirement document headings as the application subject.`);
+      if (/Sample\s+(?:Business Objective|Acceptance Criteria|Description|Requirement)/i.test(`${row.stepAction} ${row.stepExpected}`)) errors.push(`${testCase.id}: step ${index} uses a sample value derived from a document heading.`);
+      if (hasMultipleActions(row.stepAction)) errors.push(`${testCase.id}: step ${index} combines multiple tester actions.`);
+      if (hasVagueData(row.stepAction)) errors.push(`${testCase.id}: step ${index} uses vague test data.`);
+      if (isGenericExpected(row.stepExpected)) errors.push(`${testCase.id}: step ${index} expected result must be measurable and tied to the action.`);
     });
     const scores = scoreTestCase(testCase);
     Object.entries(scores).forEach(([name, value]) => {
@@ -147,7 +160,7 @@ function isGenericExpected(value: string) {
 }
 
 function scoreTestCase(testCase: TestCase) {
-  const rows = azureCaseRows(testCase);
+  const rows = azureCaseRows(testCase).slice(1);
   const title = stripTitlePrefix(testCase.title);
   const weakActions = rows.filter((row) => !isSpecificAction(row.stepAction) || hasMultipleActions(row.stepAction) || hasVagueData(row.stepAction)).length;
   const weakExpected = rows.filter((row) => isGenericExpected(row.stepExpected) || row.stepExpected.split(/\s+/).length < 6).length;

@@ -42,10 +42,12 @@ test("creates a generation and downloads Excel", async ({ page }, testInfo) => {
   expect(sheet.getRow(1).values).toEqual([undefined, "ID", "Work Item Type", "Title", "Test Step", "Step Action", "Step Expected", "Area Path", "Assigned To", "State", "Test Type", "AC", "Priority", "Actions"]);
   expect(sheet.getCell("B2").value).toBe("Test Case");
   expect(String(sheet.getCell("C2").value)).toContain("Verify account creation saves the account");
-  expect(sheet.getCell("D2").value).toBe(1);
-  expect(sheet.getCell("E2").value).toBeTruthy();
-  expect(sheet.getCell("F2").value).toBeTruthy();
-  expect(sheet.getCell("D3").value).toBe(2);
+  expect(sheet.getCell("D2").value).toBe("");
+  expect(sheet.getCell("E2").value).toBe("");
+  expect(sheet.getCell("F2").value).toBe("");
+  expect(sheet.getCell("D3").value).toBe(1);
+  expect(sheet.getCell("E3").value).toBeTruthy();
+  expect(sheet.getCell("F3").value).toBeTruthy();
   expect(sheet.getCell("G2").value).toBe("E2E Portal\\General");
   expect(sheet.getCell("H2").value).toBe("qa@example.com");
   expect(sheet.getCell("I2").value).toBe("Design");

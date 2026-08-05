@@ -87,9 +87,9 @@ describe("Excel workbook", () => {
     expect(adoSheet.getCell("A2").value).toBe("");
     expect(adoSheet.getCell("B2").value).toBe("Test Case");
     expect(String(adoSheet.getCell("C2").value)).not.toMatch(/^POS-\d{3}:/);
-    expect(adoSheet.getCell("D2").value).toBe(1);
-    expect(adoSheet.getCell("E2").value).toBeTruthy();
-    expect(adoSheet.getCell("F2").value).toBeTruthy();
+    expect(adoSheet.getCell("D2").value).toBe("");
+    expect(adoSheet.getCell("E2").value).toBe("");
+    expect(adoSheet.getCell("F2").value).toBe("");
     expect(adoSheet.getCell("G2").value).toBe("Billing\\Invoices");
     expect(adoSheet.getCell("H2").value).toBe("qa@example.com");
     expect(adoSheet.getCell("I2").value).toBe("Design");
@@ -99,7 +99,7 @@ describe("Excel workbook", () => {
     expect(adoSheet.getCell("A3").value).toBe("");
     expect(adoSheet.getCell("B3").value).toBe("");
     expect(adoSheet.getCell("C3").value).toBe("");
-    expect(adoSheet.getCell("D3").value).toBe(2);
+    expect(adoSheet.getCell("D3").value).toBe(1);
     expect(adoSheet.getCell("E3").value).toBeTruthy();
     expect(adoSheet.getCell("F3").value).toBeTruthy();
     expect(adoSheet.getCell("G3").value).toBe("");
@@ -120,11 +120,12 @@ describe("Excel workbook", () => {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(buffer);
     const sheet = workbook.getWorksheet("Sheet2")!;
-    expect(String(sheet.getCell("E2").value)).toMatch(/^'/);
+    expect(String(sheet.getCell("E3").value)).toMatch(/^'/);
     expect(String(sheet.getCell("G2").value)).toBe("'+Area");
     expect(String(sheet.getCell("H2").value)).toBe("'@qa@example.com");
-    const nextMetadataRow = gen.testCases[0].steps.length + 2;
+    const nextMetadataRow = gen.testCases[0].steps.length + 3;
     expect(sheet.getCell(`B${nextMetadataRow}`).value).toBe("Test Case");
-    expect(sheet.getCell(`D${nextMetadataRow}`).value).toBe(1);
+    expect(sheet.getCell(`D${nextMetadataRow}`).value).toBe("");
+    expect(sheet.getCell(`D${nextMetadataRow + 1}`).value).toBe(1);
   });
 });
