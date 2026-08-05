@@ -68,6 +68,7 @@ export type ScreenshotAnalysisResponse = {
 const allowedMimeTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
 const lowConfidenceThreshold = 0.65;
 const reliableConfidenceThreshold = 0.65;
+const stableVisionModels = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-2.0-flash"];
 
 const confidenceSchema = z.preprocess((value) => {
   const numeric = typeof value === "string" ? Number(value.replace("%", "").trim()) : value;
@@ -115,7 +116,7 @@ export function getAiProviderConfig(env: Record<string, unknown> = runtimeEnv())
   return {
     provider: "gemini",
     apiKeyConfigured: Boolean(apiKey),
-    model: stringEnv(env.GEMINI_MODEL) || "gemini-2.5-flash",
+    model: stringEnv(env.GEMINI_MODEL) || stableVisionModels[0],
     visionEnabled: Boolean(apiKey) && visionEnabled,
     ocrFallbackEnabled: booleanEnv(env.ENABLE_OCR_FALLBACK, true)
   };
@@ -247,7 +248,7 @@ async function tryGeminiVision(input: {
 }): Promise<{ result: VisionResult | null; warning?: string }> {
   const apiKey = stringEnv(input.env?.GEMINI_API_KEY ?? runtimeEnv().GEMINI_API_KEY);
   if (!apiKey) return { result: null, warning: "Gemini Vision is not configured." };
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(input.config.model)}:generateContent`;
+  const models = candidateModels(input.config.model);
   const body = {
     contents: [{
       role: "user",
@@ -257,29 +258,39 @@ async function tryGeminiVision(input: {
       ]
     }],
     generationConfig: {
-      temperature: 0.1,
       responseMimeType: "application/json"
     }
   };
-  try {
-    const response = await input.fetchImpl(url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-goog-api-key": apiKey
-      },
-      body: JSON.stringify(body)
-    });
-    if (!response.ok) return { result: null, warning: sanitizedProviderFailure(response.status) };
-    const payload = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
-    const text = payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("").trim() ?? "";
-    if (!text) return { result: null, warning: "Gemini Vision returned an empty analysis." };
-    const parsed = normalizeVisionPayload(safeJson(text));
-    const result = visionResultSchema.parse(parsed);
-    return { result };
-  } catch (error) {
-    return { result: null, warning: geminiParseFailure(error) };
+  let unavailableModels = 0;
+  for (const model of models) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+      const response = await input.fetchImpl(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-goog-api-key": apiKey
+        },
+        body: JSON.stringify(body)
+      });
+      if (response.status === 404) {
+        unavailableModels += 1;
+        continue;
+      }
+      if (!response.ok) return { result: null, warning: sanitizedProviderFailure(response.status, model) };
+      const payload = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+      const text = payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("").trim() ?? "";
+      if (!text) return { result: null, warning: `Gemini Vision returned an empty analysis from ${model}.` };
+      const parsed = normalizeVisionPayload(safeJson(text));
+      const result = visionResultSchema.parse(parsed);
+      if (model !== input.config.model) result.warnings.push(`Configured Gemini model ${input.config.model} was unavailable. Used ${model} for screenshot analysis.`);
+      return { result };
+    } catch (error) {
+      return { result: null, warning: geminiParseFailure(error) };
+    }
   }
+  if (unavailableModels > 0) return { result: null, warning: `Configured Gemini model and fallback models were unavailable: ${models.join(", ")}.` };
+  return { result: null, warning: "Gemini Vision request failed before a provider response was received." };
 }
 
 function tryLocalOcr(requirement: RequirementInput, screenshot: ScreenshotInput): VisionResult {
@@ -574,12 +585,19 @@ function sanitizeDiagnostic(value: string) {
     .slice(0, 180);
 }
 
-function sanitizedProviderFailure(status: number) {
+function candidateModels(configuredModel: string) {
+  return [configuredModel, ...stableVisionModels]
+    .map((model) => model.trim())
+    .filter(Boolean)
+    .filter((model, index, models) => models.indexOf(model) === index);
+}
+
+function sanitizedProviderFailure(status: number, model = "configured model") {
   if (status === 401 || status === 403) return "Gemini Vision could not authenticate with the configured server-side key.";
   if (status === 429) return "Gemini Vision quota or rate limit was reached.";
-  if (status === 404) return "The configured Gemini model was unavailable.";
+  if (status === 404) return `The Gemini model ${model} was unavailable.`;
   if (status >= 500) return "Gemini Vision was temporarily unavailable.";
-  return "Gemini Vision request failed and fallback analysis was used.";
+  return `Gemini Vision request failed for ${model} and fallback analysis was used.`;
 }
 
 function booleanEnv(value: unknown, defaultValue: boolean) {

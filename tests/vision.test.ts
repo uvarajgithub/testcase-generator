@@ -84,6 +84,36 @@ describe("Gemini Vision analysis", () => {
     expect(three.summary.generationMode).toBe("OCR-assisted");
     expect(caseCount(one)).toBe(caseCount(three));
   });
+
+  it("tries a stable Gemini fallback model when the configured model is unavailable", async () => {
+    const requestedUrls: string[] = [];
+    const fetchImpl: typeof fetch = async (url) => {
+      requestedUrls.push(String(url));
+      if (requestedUrls.length === 1) return new Response("not found", { status: 404 });
+      return new Response(JSON.stringify({
+        candidates: [{ content: { parts: [{ text: JSON.stringify({
+          screenshot_type: "application_screen",
+          screen_name: "New User Group",
+          controls: [{ label: "TNA Supervisor", type: "radio-group", options: ["Yes", "No"], confidence: 90 }],
+          visible_text: ["TNA Supervisor", "Yes", "No"],
+          overall_confidence: 90
+        }) }] } }]
+      }));
+    };
+
+    const result = await analyseScreenshots({
+      requirement,
+      screenshots: [{ id: "SS-1", filename: "new-user-group.png", mimeType: "image/png", data: png }],
+      env: { GEMINI_API_KEY: "secret", GEMINI_MODEL: "gemini-missing-model", ENABLE_GEMINI_VISION: "true" },
+      fetchImpl
+    });
+
+    expect(requestedUrls[0]).toContain("gemini-missing-model");
+    expect(requestedUrls[1]).toContain("gemini-3.6-flash");
+    expect(result.summary.geminiVisionAnalysed).toBe(1);
+    expect(result.summary.generationMode).toBe("Gemini Vision-assisted");
+    expect(result.reports[0].warnings.join(" ")).toContain("Used gemini-3.6-flash");
+  });
 });
 
 function caseCount(analysis: Awaited<ReturnType<typeof analyseScreenshots>>) {
