@@ -24,7 +24,7 @@ const emptyRequirement: RequirementInput = {
 };
 
 const defaultConfig: GenerationConfig = generationConfigSchema.parse({
-  selectedTypes: ["Positive", "Negative", "Validation", "Edge", "Security"],
+  selectedTypes: testTypes,
   detailLevel: "Standard",
   includeTestData: true,
   includeExpectedResults: true,
@@ -140,47 +140,17 @@ export function App() {
     }
   }
 
-  async function refineExisting() {
-    if (generatingRef.current || (!generation && !requirement.acceptanceCriteria.trim())) return;
+  async function refineExistingExcel(file: File) {
+    if (generatingRef.current) return;
     generatingRef.current = true;
-    const sourceRequirement = generation?.requirement ?? requirement;
-    const prepared = withDefaults({ ...sourceRequirement, acceptanceCriteria: requirement.acceptanceCriteria.trim() || sourceRequirement.acceptanceCriteria }, requirementFiles);
-    setRequirement(prepared);
     setBusy("Refining");
     setError("");
-    setProgress(["Reading requirement sections", "Ignoring document headings", "Rebuilding Azure-ready test cases"]);
+    setProgress(["Reading uploaded Excel workbook", "Refining existing test cases", "Preparing Azure-ready download"]);
     try {
-      const analysis = await api.analyze(prepared, screenshots).catch((err) => {
-        setError(err instanceof Error ? `Refinement analysis warning: ${err.message}. Continuing with available requirement text.` : "Refinement analysis warning. Continuing with available requirement text.");
-        return { criteria: [], detectedElements: [], warnings: ["Analysis fallback used."], assumptions: ["Analysis could not complete; refinement continued with available requirement text."], ambiguities: [] };
-      });
-      const data = await api.saveGeneration({
-        id: generation?.id,
-        createdAt: generation?.createdAt,
-        exportHistory: generation?.exportHistory,
-        requirement: prepared,
-        criteria: analysis.criteria,
-        screenshots,
-        detectedElements: analysis.detectedElements,
-        config,
-        assumptions: [...analysis.assumptions, "Existing cases were refined into the Azure-ready format."],
-        warnings: analysis.warnings,
-        ambiguities: analysis.ambiguities,
-        testCases: []
-      });
-      const validationErrors = validateAzureTestCases(data.generation.testCases);
-      if (validationErrors.length) {
-        setError(`Refinement needs review: ${validationErrors.slice(0, 4).join(" ")}`);
-      } else {
-        setMessage("Existing test cases refined into the discussed format.");
-      }
-      setGeneration(data.generation);
-      setCoverage(data.coverage);
-      setGenerations((prev) => [data.generation, ...prev.filter((item) => item.id !== data.generation.id)]);
-      setActive("Review Test Cases");
-      void refresh();
+      const filename = await api.refineExistingExcel(file);
+      setMessage(`Downloaded ${filename}.`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Refinement failed. Check the requirement text and try again.");
+      setError(err instanceof Error ? err.message : "Refinement failed. Upload an existing test-case Excel file and try again.");
     } finally {
       generatingRef.current = false;
       setBusy("");
@@ -254,8 +224,7 @@ export function App() {
             config={config}
             setConfig={setConfig}
             generate={generate}
-            refineExisting={refineExisting}
-            hasGeneration={Boolean(generation?.testCases.length)}
+            refineExistingExcel={refineExistingExcel}
             busy={busy}
             progress={progress}
           />
@@ -285,13 +254,13 @@ function GenerateTab(props: {
   config: GenerationConfig;
   setConfig: (c: GenerationConfig) => void;
   generate: () => void;
-  refineExisting: () => void;
-  hasGeneration: boolean;
+  refineExistingExcel: (file: File) => void;
   busy: string;
   progress: string[];
 }) {
-  const { requirement, setRequirement, requirementFiles, setRequirementFiles, uploadRequirementFiles, screenshots, setScreenshots, uploadScreenshots, config, setConfig, generate, refineExisting, hasGeneration, busy, progress } = props;
+  const { requirement, setRequirement, requirementFiles, setRequirementFiles, uploadRequirementFiles, screenshots, setScreenshots, uploadScreenshots, config, setConfig, generate, refineExistingExcel, busy, progress } = props;
   const [sourceMode, setSourceMode] = useState<"Manual Entry" | "Upload Requirement">("Manual Entry");
+  const [existingCaseFile, setExistingCaseFile] = useState<File | null>(null);
   const update = (key: keyof RequirementInput, value: string) => setRequirement({ ...requirement, [key]: value });
   const canGenerate = Boolean(requirement.acceptanceCriteria.trim());
   const setCount = (value: string) => setConfig({ ...config, maxCases: value === "Auto" ? 250 : Number(value) });
@@ -401,7 +370,13 @@ function GenerateTab(props: {
 
       {busy && <ProgressList items={progress} />}
       <div className="actions">
-        <button onClick={refineExisting} disabled={Boolean(busy) || (!hasGeneration && !canGenerate)}>
+        <label className="file-strip refine-upload">
+          <UploadCloud size={18} />
+          <span>{existingCaseFile ? existingCaseFile.name : "Upload existing test case Excel"}</span>
+          <small>XLSX, XLS</small>
+          <input type="file" accept=".xlsx,.xls" onChange={(e) => setExistingCaseFile(e.target.files?.[0] ?? null)} />
+        </label>
+        <button onClick={() => existingCaseFile && refineExistingExcel(existingCaseFile)} disabled={Boolean(busy) || !existingCaseFile}>
           <Check size={18} />{busy === "Refining" ? "Refining Existing Cases..." : "Refine Existing Test Cases"}
         </button>
         <button className="primary big generate-button" onClick={generate} disabled={!canGenerate || Boolean(busy)}>
@@ -452,12 +427,12 @@ function ReviewTab({ generation, coverage, setGeneration, save, exportExcel, ope
       <AzureExportPanel config={azureConfig} setConfig={setAzureConfig} defaultArea={`${generation.requirement.projectName}\\${generation.requirement.moduleName}`} onExport={exportExcel} />
       <div className="table-wrap">
         <table>
-          <thead><tr><th></th><th>ID</th><th>Work Item Type</th><th>Title</th><th>Test Step</th><th>Step Action</th><th>Step Expected</th><th>Area Path</th><th>Assigned To</th><th>State</th><th>Test Type</th><th>AC</th><th>Priority</th><th>Actions</th></tr></thead>
+          <thead><tr><th></th><th>ID</th><th>Work Item Type</th><th>Title</th><th>Test Step</th><th>Step Action</th><th>Step Expected</th><th>Area Path</th><th>Assigned To</th><th>State</th></tr></thead>
           <tbody>{filtered.flatMap((tc) => azureCaseRows(tc).map((row, rowIndex) => {
             const isMetadata = rowIndex === 0;
             return (
               <tr key={`${tc.id}-${rowIndex}`} className={isMetadata ? "metadata-row" : "step-row"}>
-                <td>{isMetadata && <input className="row-check" type="checkbox" aria-label={`Select ${tc.id}`} />}</td>
+                <td>{isMetadata && <div className="row-actions"><input className="row-check" type="checkbox" aria-label={`Select ${tc.id}`} /><button aria-label={`Edit ${tc.id}`} onClick={() => setEditing(tc)}><Edit3 size={16} /></button><button aria-label={`Duplicate ${tc.id}`} onClick={() => setGeneration({ ...generation, testCases: [...generation.testCases, { ...tc, id: `${tc.id}-COPY`, title: `${tc.title} copy` }] })}><Copy size={16} /></button><button aria-label={`Regenerate ${tc.id}`} onClick={() => replaceCase({ ...tc, testerComments: "Regeneration requested; preserved existing user edits." })}><RefreshCw size={16} /></button><button aria-label={`Delete ${tc.id}`} onClick={() => setGeneration({ ...generation, testCases: generation.testCases.filter((item) => item.id !== tc.id) })}><Trash2 size={16} /></button></div>}</td>
                 <td>{row.id}</td>
                 <td>{row.workItemType}</td>
                 <td>{row.title}</td>
@@ -467,10 +442,6 @@ function ReviewTab({ generation, coverage, setGeneration, save, exportExcel, ope
                 <td>{isMetadata ? (azureConfig.areaPath || `${generation.requirement.projectName}\\${generation.requirement.moduleName}`) : ""}</td>
                 <td>{isMetadata ? azureConfig.assignedTo : ""}</td>
                 <td>{isMetadata ? azureConfig.state : ""}</td>
-                <td>{isMetadata ? tc.type : ""}</td>
-                <td>{row.ac}</td>
-                <td>{row.priority}</td>
-                <td className="row-actions">{isMetadata && <><button aria-label={`Edit ${tc.id}`} onClick={() => setEditing(tc)}><Edit3 size={16} /></button><button aria-label={`Duplicate ${tc.id}`} onClick={() => setGeneration({ ...generation, testCases: [...generation.testCases, { ...tc, id: `${tc.id}-COPY`, title: `${tc.title} copy` }] })}><Copy size={16} /></button><button aria-label={`Regenerate ${tc.id}`} onClick={() => replaceCase({ ...tc, testerComments: "Regeneration requested; preserved existing user edits." })}><RefreshCw size={16} /></button><button aria-label={`Delete ${tc.id}`} onClick={() => setGeneration({ ...generation, testCases: generation.testCases.filter((item) => item.id !== tc.id) })}><Trash2 size={16} /></button></>}</td>
               </tr>
             );
           }))}</tbody>

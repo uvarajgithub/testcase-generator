@@ -326,6 +326,19 @@ export function inferElementsFromRequirement(requirement: RequirementInput, scre
   const source = `${model.scenarioText} ${requirement.requirementDescription} ${requirement.businessRules}`;
   const matches = uiPatterns.filter(([needle]) => source.toLowerCase().includes(needle));
   const baseScreenshot = screenshots[0] ?? { id: "manual", filename: "Manually reviewed input" };
+  const screenshotElements = screenshots.map((screenshot, index) => ({
+    id: `SS-UI-${String(index + 1).padStart(3, "0")}`,
+    screenshotId: screenshot.id,
+    screenshotName: screenshot.filename,
+    type: "Reviewed screen",
+    label: `${model.feature || requirement.featureName} screen ${index + 1}`,
+    visibleText: screenshot.filename,
+    relatedAcceptanceCriterionId: undefined,
+    confidence: 0.2,
+    userCorrection: "",
+    notes: "Screenshot was attached as test-design context. AI vision is unavailable in this fallback path, so visible controls must be reviewed by the user.",
+    assumption: "Screenshot content was not visually interpreted by AI; generation used requirement text and uploaded screenshot references."
+  }));
   const inferredElements = model.feature === "TNA Supervisor" ? [{
     id: "UI-001",
     screenshotId: baseScreenshot.id,
@@ -353,6 +366,7 @@ export function inferElementsFromRequirement(requirement: RequirementInput, scre
     assumption: "AI vision is unavailable locally; this finding must be reviewed by the user."
   })).filter((item) => !isDocumentHeading(item.label));
   if (inferredElements.length) return inferredElements;
+  if (screenshots.length) return [...elements, ...screenshotElements];
   return elements.length ? elements : [{
     id: "UI-001",
     screenshotId: baseScreenshot.id,
@@ -395,12 +409,12 @@ export function generateCases(generation: Pick<Generation, "requirement" | "crit
   const counts: Partial<Record<TestCase["type"], number>> = {};
   const cases: TestCase[] = [];
   const selected = generation.config.selectedTypes;
-  for (const criterion of generation.criteria) {
+  const criteria = expandedCriteriaForGeneration(generation.requirement, generation.criteria);
+  for (const criterion of criteria) {
     for (const type of selected) {
       if (cases.length >= generation.config.maxCases) break;
-      if (type === "Integration" && criterion.dependencies.length === 0) continue;
       if (type === "Responsive" && !["Web", "Mobile"].includes(generation.requirement.platform)) continue;
-      const relatedElement = generation.detectedElements.find((el) => el.relatedAcceptanceCriterionId === criterion.id) ?? generation.detectedElements[0];
+      const relatedElement = generation.detectedElements.find((el) => el.relatedAcceptanceCriterionId === criterion.id) ?? generation.detectedElements[cases.length % Math.max(generation.detectedElements.length, 1)];
       for (const variant of variantsFor(type, criterion, generation.requirement.platform)) {
         if (cases.length >= generation.config.maxCases) break;
         counts[type] = (counts[type] ?? 0) + 1;
@@ -409,6 +423,41 @@ export function generateCases(generation: Pick<Generation, "requirement" | "crit
     }
   }
   return removeDuplicates(cases);
+}
+
+function expandedCriteriaForGeneration(requirement: RequirementInput, criteria: AcceptanceCriterion[]) {
+  const byText = new Map<string, AcceptanceCriterion>();
+  criteria.forEach((criterion) => byText.set(criterion.text.toLowerCase(), criterion));
+  const sourceLines = [
+    ...scenarioSourceText(requirement.acceptanceCriteria).split(/\n+/),
+    ...requirement.businessRules.split(/\n+/),
+    ...requirement.requirementDescription.split(/\n+/)
+  ]
+    .flatMap((line) => line.split(/(?<=[.;])\s+(?=(?:The|User|Admin|Customer|When|Given|Then|If|System|Application)\b)/))
+    .map(cleanRequirementLine)
+    .filter((line) => line.length >= 18 && !isDocumentHeading(line));
+  sourceLines.forEach((line) => {
+    if (byText.has(line.toLowerCase())) return;
+    const parsed = parseAcceptanceCriteria(line)[0];
+    if (parsed) byText.set(line.toLowerCase(), { ...parsed, id: `AC-${String(byText.size + 1).padStart(3, "0")}` });
+  });
+  if (byText.size === 1) {
+    const only = Array.from(byText.values())[0];
+    splitScenarioClauses(only.text).forEach((clause) => {
+      if (!byText.has(clause.toLowerCase())) {
+        const parsed = parseAcceptanceCriteria(clause)[0];
+        if (parsed) byText.set(clause.toLowerCase(), { ...parsed, id: `AC-${String(byText.size + 1).padStart(3, "0")}` });
+      }
+    });
+  }
+  return Array.from(byText.values());
+}
+
+function splitScenarioClauses(value: string) {
+  return value
+    .split(/\s+(?:and|also|then|when|while)\s+/i)
+    .map(cleanRequirementLine)
+    .filter((line) => line.length >= 18 && !isDocumentHeading(line));
 }
 
 function tnaSupervisorCases(generation: Pick<Generation, "requirement" | "criteria" | "detectedElements" | "config">, model: RequirementModel): TestCase[] {
@@ -999,28 +1048,29 @@ function variantsFor(type: TestCase["type"], criterion: AcceptanceCriterion, pla
     ];
   }
   if (type === "Integration") {
+    const dependency = criterion.dependencies.length ? criterion.dependencies.join(", ") : `${primaryData} backend service`;
     return [
       {
         name: "dependency-success",
-        title: `Verify successful dependency flow for ${criterion.dependencies.join(", ")}`,
+        title: `Verify successful dependency flow for ${dependency}`,
         data: "Available dependency with valid response",
-        steps: [`Prepare the dependent service condition: ${criterion.dependencies.join(", ")}.`, "Run the user flow through the integration point.", "Review returned data, status, and persisted state.", "Confirm the user-visible outcome matches the acceptance criterion."],
+        steps: [`Prepare the dependent service condition for ${dependency}.`, "Click the feature submit button to run the user flow through the integration point.", `Review returned ${dependency} data, status, and persisted application state.`, "Review the feature page status message and saved record after the integration response."],
         expected: "The integrated dependency returns successfully and the system maps the response into the correct visible and persisted state.",
         tags: ["integration", "success"]
       },
       {
         name: "dependency-timeout",
-        title: `Handle timeout from ${criterion.dependencies.join(", ")}`,
+        title: `Handle timeout from ${dependency}`,
         data: "Dependency timeout",
-        steps: ["Start the user flow with valid data.", `Simulate timeout from ${criterion.dependencies.join(", ")}.`, "Attempt retry or recovery.", "Review visible status and persisted state."],
+        steps: ["Enter valid data in the feature form before triggering the dependency condition.", `Simulate timeout from ${dependency}.`, "Click the Retry or Submit button after the timeout message appears.", "Review the visible status message and persisted application state."],
         expected: "The system shows retry guidance, avoids duplicate processing, and records no misleading success state.",
         tags: ["integration", "timeout", "retry"]
       },
       {
         name: "dependency-failure",
-        title: `Recover from failed ${criterion.dependencies.join(", ")} response`,
+        title: `Recover from failed ${dependency} response`,
         data: "Dependency error response",
-        steps: ["Start the user flow with valid data.", `Return an error response from ${criterion.dependencies.join(", ")}.`, "Review error handling and recovery path.", "Retry after the dependency recovers."],
+        steps: ["Enter valid data in the feature form before triggering the dependency condition.", `Return an error response from ${dependency}.`, "Review the feature error message and recovery control.", "Click the Retry or Submit button after the dependency recovers."],
         expected: "The system handles the failure safely, keeps data consistent, and succeeds when retried after recovery.",
         tags: ["integration", "failure", "recovery"]
       }
@@ -1151,6 +1201,9 @@ function enhanceSteps(steps: string[], generation: Pick<Generation, "requirement
     .replace(/^Start the feature flow with partially entered valid data\.$/i, `Enter partial valid data in the ${feature} form fields before resizing the viewport.`)
     .replace(/^Start the user flow with valid data\.$/i, `Enter valid data in the ${feature} form fields before triggering the dependency condition.`)
     .replace(/^Run the user flow through the integration point\.$/i, `Click the ${feature} Submit button to call the configured integration point.`)
+    .replace(/\bfeature submit button\b/gi, `${feature} Submit button`)
+    .replace(/\bfeature form\b/gi, `${feature} form`)
+    .replace(/\bfeature page\b/gi, `${feature} page`)
   );
 }
 

@@ -45,6 +45,24 @@ export const api = {
     URL.revokeObjectURL(link.href);
     return filename;
   },
+  refineExistingExcel: async (file: File) => {
+    const form = new FormData();
+    form.append("workbook", file);
+    const response = await fetch("/api/refine-existing-excel", { method: "POST", body: form });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null) as ApiResponse<unknown> | null;
+      throw new Error(body && !body.ok ? body.error.message : "Existing test-case refinement failed.");
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get("content-disposition") ?? "";
+    const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? "Refined_Azure_DevOps_Test_Cases.xlsx";
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    return filename;
+  },
   openHtml: async (generationId: string) => {
     const response = await fetch(`/api/generations/${generationId}/html`, { method: "POST" });
     if (!response.ok) throw new Error("HTML report export failed.");

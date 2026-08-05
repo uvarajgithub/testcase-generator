@@ -1,7 +1,7 @@
 import ExcelJS from "exceljs";
 import type { Generation, TestCase } from "../../src/lib/schemas";
 import { calculateCoverage } from "../../src/lib/analysis";
-import { azureCaseRows, validateAzureTestCases } from "../../src/lib/format";
+import { azureCaseRows, scrubDocumentHeadingText, stripTitlePrefix, validateAzureTestCases } from "../../src/lib/format";
 import { sanitizeFilename } from "./http";
 
 export type AzureExportConfig = {
@@ -60,6 +60,329 @@ export async function buildWorkbook(generation: Generation, previousGenerations:
   return workbook.xlsx.writeBuffer();
 }
 
+export async function buildRefinedWorkbook(input: ArrayBuffer | Uint8Array, originalName = "Existing_Test_Cases.xlsx", azureConfig: AzureExportConfig = {}) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(toWorkbookBuffer(input));
+  const parsedCases = parseUploadedTestCases(workbook);
+  if (!parsedCases.length) throw new Error("No test cases were found in the uploaded workbook. Upload an Excel file with Title, Test Step, Step Action, and Step Expected columns.");
+  const generation = refinedGeneration(parsedCases, originalName);
+  const buffer = await buildWorkbook(generation, [], azureConfig);
+  const stamp = new Date().toISOString().slice(0, 16).replace("T", "_").replace(":", "-");
+  return {
+    buffer,
+    filename: `${sanitizeFilename("Refined_" + originalName.replace(/\.[^.]+$/, ""))}_Azure_DevOps_Test_Cases_${stamp}.xlsx`,
+    count: generation.testCases.length
+  };
+}
+
+function toWorkbookBuffer(input: ArrayBuffer | Uint8Array): ExcelJS.Buffer {
+  if (input instanceof Uint8Array) return input as unknown as ExcelJS.Buffer;
+  if (input instanceof ArrayBuffer) return input as ExcelJS.Buffer;
+  return input;
+}
+
+type UploadedCase = {
+  title: string;
+  steps: string[];
+  expectedResults: string[];
+  type?: TestCase["type"];
+  priority?: TestCase["priority"];
+};
+
+function parseUploadedTestCases(workbook: ExcelJS.Workbook): UploadedCase[] {
+  const sheet = workbook.getWorksheet("Sheet2") ?? workbook.worksheets[0];
+  if (!sheet) return [];
+  const headerRow = sheet.getRow(1);
+  const headers = headerRow.values as ExcelJS.CellValue[];
+  const columnByHeader = new Map<string, number>();
+  headers.forEach((value, index) => {
+    const key = normalizeHeader(cellText(value));
+    if (key) columnByHeader.set(key, index);
+  });
+  const titleColumn = findColumn(columnByHeader, ["title", "test case title", "test title", "scenario"]);
+  const stepColumn = findColumn(columnByHeader, ["test step", "step", "step no", "step number"]);
+  const actionColumn = findColumn(columnByHeader, ["step action", "action", "test steps", "steps"]);
+  const expectedColumn = findColumn(columnByHeader, ["step expected", "expected result", "expected results", "expected"]);
+  const typeColumn = findColumn(columnByHeader, ["test type", "test case type", "type"]);
+  const priorityColumn = findColumn(columnByHeader, ["priority"]);
+  if (!titleColumn && !actionColumn && !expectedColumn) return [];
+
+  const cases: UploadedCase[] = [];
+  let current: UploadedCase | undefined;
+  sheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return;
+    const title = cleanUploadedText(rowValue(row, titleColumn));
+    const stepAction = cleanUploadedText(rowValue(row, actionColumn));
+    const stepExpected = cleanUploadedText(rowValue(row, expectedColumn));
+    const stepValue = cleanUploadedText(rowValue(row, stepColumn));
+    const type = parseType(rowValue(row, typeColumn));
+    const priority = parsePriority(rowValue(row, priorityColumn));
+    const hasMetadata = Boolean(title);
+    const hasStep = Boolean(stepAction || stepExpected || /^\d+$/.test(stepValue));
+    if (hasMetadata) {
+      current = { title, steps: [], expectedResults: [], type, priority };
+      cases.push(current);
+    }
+    if (!current && hasStep) {
+      current = { title: `Imported test case ${cases.length + 1}`, steps: [], expectedResults: [], type, priority };
+      cases.push(current);
+    }
+    if (current && hasStep) {
+      splitStepText(stepAction || title || `Review imported test case ${cases.length}`).forEach((step) => current?.steps.push(step));
+      if (stepExpected) current.expectedResults.push(stepExpected);
+    }
+  });
+  return cases.filter((item) => item.title || item.steps.length);
+}
+
+function refinedGeneration(uploadedCases: UploadedCase[], originalName: string): Generation {
+  const now = new Date().toISOString();
+  const usedTitles = new Set<string>();
+  const testCases = uploadedCases.map((item, index) => refineUploadedCase(item, index, usedTitles));
+  const criteria = testCases.map((testCase, index) => ({
+    id: `IMP-${String(index + 1).padStart(3, "0")}`,
+    text: testCase.scenario,
+    actor: "QA user",
+    action: testCase.objective,
+    inputs: [],
+    conditions: [],
+    validations: [testCase.expectedResult],
+    outcomes: [testCase.expectedResult],
+    dependencies: [],
+    assumptions: ["Refined from an uploaded existing test-case workbook."],
+    warnings: []
+  }));
+  return {
+    id: `REF-${Date.now().toString().slice(-8)}`,
+    requirement: {
+      projectName: "Refined Existing Test Cases",
+      moduleName: "Uploaded Workbook",
+      featureName: "Existing test case optimization",
+      requirementId: "UPLOAD-REFINE",
+      requirementTitle: "Refine existing test cases",
+      requirementDescription: `Uploaded workbook: ${originalName}`,
+      acceptanceCriteria: testCases.map((testCase) => testCase.scenario).join("\n"),
+      businessRules: "",
+      preconditions: "",
+      userRole: "QA user",
+      platform: "Web",
+      priority: "High",
+      additionalNotes: "Acceptance criteria were not required for this refinement workflow."
+    },
+    criteria,
+    screenshots: [],
+    detectedElements: [],
+    config: {
+      selectedTypes: ["Positive", "Negative", "Validation", "Edge", "Security"],
+      detailLevel: "Standard",
+      priorityDistribution: "Risk based",
+      includeTestData: true,
+      includeExpectedResults: true,
+      includePostconditions: true,
+      includeAutomationCandidates: true,
+      includeScreenshotReferences: true,
+      maxCases: 250,
+      preferredLanguage: "English",
+      browserDeviceCoverage: "Chrome, Edge"
+    },
+    testCases,
+    assumptions: ["Existing test cases were refined from the uploaded workbook without requiring acceptance criteria."],
+    ambiguities: [],
+    warnings: [],
+    createdAt: now,
+    updatedAt: now,
+    exportHistory: []
+  };
+}
+
+function refineUploadedCase(item: UploadedCase, index: number, usedTitles: Set<string>): TestCase {
+  const type = item.type ?? inferType(item.title, item.steps.join(" "));
+  const prefix = typePrefix(type);
+  const feature = featureFromTitle(item.title || item.steps[0] || `Imported test case ${index + 1}`, index);
+  const title = uniqueTitle(refinedTitle(item.title || feature, feature, index), usedTitles);
+  const expectedResult = measurableExpected(item.expectedResults.at(-1), feature);
+  return {
+    id: `${prefix}-${String(index + 1).padStart(3, "0")}`,
+    requirementId: "UPLOAD-REFINE",
+    acceptanceCriteriaId: `IMP-${String(index + 1).padStart(3, "0")}`,
+    module: "Uploaded Workbook",
+    feature,
+    scenario: stripTitlePrefix(scrubDocumentHeadingText(item.title || title)),
+    title,
+    type,
+    objective: `Refine and execute the imported scenario for ${feature}.`,
+    preconditions: "The tester has access to the application area named in the imported test case.",
+    testData: "Use existing uploaded test data or create reviewer-approved values for the named fields.",
+    steps: refinedSteps(item.steps, feature),
+    expectedResult,
+    postconditions: "The application state remains ready for the next test case.",
+    priority: item.priority ?? "High",
+    severity: item.priority ?? "High",
+    automationCandidate: "Partial",
+    automationNotes: "Review selectors and environment data before automation.",
+    screenshotReference: "",
+    detectedUIElement: feature,
+    assumptions: "Refined from uploaded Excel content.",
+    tags: ["refined", "uploaded"],
+    executionStatus: "Not Run",
+    actualResult: "",
+    defectId: "",
+    testerComments: "",
+    inferred: true
+  };
+}
+
+function refinedSteps(steps: string[], feature: string) {
+  const cleaned = steps
+    .map((step) => concreteStep(step, feature))
+    .filter(Boolean);
+  const padded = cleaned.length ? cleaned : [`Open the ${feature} page.`];
+  while (padded.length < 3) {
+    if (padded.length === 1) padded.push(`Review the ${feature} page controls required for the imported scenario.`);
+    else padded.push(`Click the ${feature} submit or save button for the imported scenario.`);
+  }
+  return padded.slice(0, 12);
+}
+
+function concreteStep(value: string, feature: string) {
+  const cleaned = stripListPrefix(scrubDocumentHeadingText(value)).replace(/\s+/g, " ").trim();
+  if (!cleaned) return "";
+  if (/^(open|click|select|enter|review|verify|confirm|inspect|navigate|search|choose|leave|focus|replace|submit|save)\b/i.test(cleaned)) {
+    return cleaned.toLowerCase().includes(feature.toLowerCase()) ? cleaned : `${cleaned.replace(/[. ]+$/, "")} on the ${feature} page.`;
+  }
+  return `Review the ${feature} page control for ${cleaned}.`;
+}
+
+function refinedTitle(value: string, feature: string, index: number) {
+  const cleaned = stripTitlePrefix(scrubDocumentHeadingText(value)).replace(/\s+/g, " ").trim();
+  const withoutVerify = cleaned.replace(/^verify\s+/i, "");
+  const base = withoutVerify && withoutVerify.split(/\s+/).length >= 5 ? withoutVerify : `${feature} imported scenario ${index + 1} shows the correct application response`;
+  const title = `Verify ${base}`;
+  return title.split(/\s+/).length >= 8 ? title : `${title} in the application workflow`;
+}
+
+function uniqueTitle(title: string, used: Set<string>) {
+  let next = title;
+  let copy = 2;
+  while (used.has(next.toLowerCase())) {
+    next = `${title} ${copy}`;
+    copy += 1;
+  }
+  used.add(next.toLowerCase());
+  return next;
+}
+
+function measurableExpected(value: string | undefined, feature: string) {
+  const cleaned = cleanUploadedText(value ?? "");
+  if (cleaned && !/^(pass|passed|ok|success|successful)$/i.test(cleaned)) {
+    return cleaned.split(/\s+/).length >= 6 ? scrubDocumentHeadingText(cleaned) : `${feature} displays "${scrubDocumentHeadingText(cleaned)}" as a visible status after the action.`;
+  }
+  return `The ${feature} page displays the expected status, message, or saved value for the performed action.`;
+}
+
+function featureFromTitle(value: string, index: number) {
+  const words = stripTitlePrefix(scrubDocumentHeadingText(value))
+    .replace(/^verify\s+/i, "")
+    .replace(/[^a-z0-9\s/&-]/gi, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 5)
+    .join(" ");
+  return words ? `${words} page` : `Imported test case ${index + 1} page`;
+}
+
+function splitStepText(value: string) {
+  return value
+    .split(/\r?\n|(?:^|\s)(?=\d+[.)]\s+)/)
+    .map(stripListPrefix)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function stripListPrefix(value: string) {
+  return value.replace(/^\s*(?:[-*]|\d+[.)])\s*/, "");
+}
+
+function rowValue(row: ExcelJS.Row, column: number | undefined) {
+  return column ? cellText(row.getCell(column).value) : "";
+}
+
+function cellText(value: ExcelJS.CellValue | undefined): string {
+  if (value == null) return "";
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "object") {
+    if ("text" in value) return String(value.text ?? "");
+    if ("richText" in value && Array.isArray(value.richText)) return value.richText.map((part) => part.text).join("");
+    if ("formula" in value) return String(value.result ?? value.formula ?? "");
+  }
+  return String(value);
+}
+
+function cleanUploadedText(value: string) {
+  return scrubDocumentHeadingText(value.replace(/\u0000/g, "").replace(/\s+/g, " ").trim());
+}
+
+function normalizeHeader(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function findColumn(headers: Map<string, number>, names: string[]) {
+  for (const name of names) {
+    const direct = headers.get(normalizeHeader(name));
+    if (direct) return direct;
+  }
+  for (const [header, index] of headers) {
+    if (names.some((name) => header.includes(normalizeHeader(name)))) return index;
+  }
+  return undefined;
+}
+
+function parseType(value: string): TestCase["type"] | undefined {
+  const lower = value.toLowerCase();
+  if (lower.includes("negative")) return "Negative";
+  if (lower.includes("edge")) return "Edge";
+  if (lower.includes("validation")) return "Validation";
+  if (lower.includes("security")) return "Security";
+  if (lower.includes("accessibility")) return "Accessibility";
+  if (lower.includes("responsive")) return "Responsive";
+  if (lower.includes("integration")) return "Integration";
+  if (lower.includes("ui")) return "UI";
+  if (lower.includes("positive")) return "Positive";
+  return undefined;
+}
+
+function inferType(title: string, steps: string): TestCase["type"] {
+  const text = `${title} ${steps}`.toLowerCase();
+  if (/\bunauthori[sz]ed|permission|token|session|security\b/.test(text)) return "Security";
+  if (/\binvalid|empty|required|validation|error\b/.test(text)) return "Validation";
+  if (/\bboundary|max|min|edge|limit\b/.test(text)) return "Edge";
+  if (/\bapi|integration|service\b/.test(text)) return "Integration";
+  return "Positive";
+}
+
+function parsePriority(value: string): TestCase["priority"] | undefined {
+  const lower = value.toLowerCase();
+  if (lower.includes("critical")) return "Critical";
+  if (lower.includes("high")) return "High";
+  if (lower.includes("medium")) return "Medium";
+  if (lower.includes("low")) return "Low";
+  return undefined;
+}
+
+function typePrefix(type: TestCase["type"]) {
+  return {
+    Positive: "POS",
+    Negative: "NEG",
+    Edge: "EDGE",
+    Validation: "VAL",
+    UI: "UI",
+    Accessibility: "A11Y",
+    Security: "SEC",
+    Responsive: "RESP",
+    Integration: "INT"
+  }[type];
+}
+
 function addAzureDevOpsImport(workbook: ExcelJS.Workbook, generation: Generation, azureConfig: AzureExportConfig) {
   const sheet = workbook.addWorksheet("Sheet2");
   sheet.columns = [
@@ -71,11 +394,7 @@ function addAzureDevOpsImport(workbook: ExcelJS.Workbook, generation: Generation
     { key: "stepExpected", header: "Step Expected", width: 60 },
     { key: "areaPath", header: "Area Path", width: 30 },
     { key: "assignedTo", header: "Assigned To", width: 25 },
-    { key: "state", header: "State", width: 15 },
-    { key: "testType", header: "Test Type", width: 18 },
-    { key: "ac", header: "AC", width: 15 },
-    { key: "priority", header: "Priority", width: 12 },
-    { key: "actions", header: "Actions", width: 20 }
+    { key: "state", header: "State", width: 15 }
   ];
 
   const state = sanitizeExcelValue(azureConfig.state || "Design");
@@ -94,11 +413,7 @@ function addAzureDevOpsImport(workbook: ExcelJS.Workbook, generation: Generation
         stepExpected: sanitizeExcelValue(row.stepExpected),
         areaPath: isMetadata ? areaPath : "",
         assignedTo: isMetadata ? assignedTo : "",
-        state: isMetadata ? state : "",
-        testType: isMetadata ? sanitizeExcelValue(testCase.type) : "",
-        ac: sanitizeExcelValue(row.ac),
-        priority: sanitizeExcelValue(row.priority),
-        actions: sanitizeExcelValue(row.actions)
+        state: isMetadata ? state : ""
       });
     });
   });

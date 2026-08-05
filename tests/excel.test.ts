@@ -2,7 +2,7 @@ import ExcelJS from "exceljs";
 import { describe, expect, it } from "vitest";
 import { generateCases, inferElementsFromRequirement, parseAcceptanceCriteria } from "../src/lib/analysis";
 import type { Generation } from "../src/lib/schemas";
-import { buildFilename, buildWorkbook } from "../server/lib/excel";
+import { buildFilename, buildRefinedWorkbook, buildWorkbook } from "../server/lib/excel";
 
 function sampleGeneration(): Generation {
   const requirement = {
@@ -78,11 +78,7 @@ describe("Excel workbook", () => {
       "Step Expected",
       "Area Path",
       "Assigned To",
-      "State",
-      "Test Type",
-      "AC",
-      "Priority",
-      "Actions"
+      "State"
     ]);
     expect(adoSheet.getCell("A2").value).toBe("");
     expect(adoSheet.getCell("B2").value).toBe("Test Case");
@@ -93,9 +89,7 @@ describe("Excel workbook", () => {
     expect(adoSheet.getCell("G2").value).toBe("Billing\\Invoices");
     expect(adoSheet.getCell("H2").value).toBe("qa@example.com");
     expect(adoSheet.getCell("I2").value).toBe("Design");
-    expect(adoSheet.getCell("J2").value).toBe("Positive");
-    expect(adoSheet.getCell("K2").value).toBe("AC-001");
-    expect(adoSheet.getCell("L2").value).toBeTruthy();
+    expect(adoSheet.columnCount).toBe(9);
     expect(adoSheet.getCell("A3").value).toBe("");
     expect(adoSheet.getCell("B3").value).toBe("");
     expect(adoSheet.getCell("C3").value).toBe("");
@@ -127,5 +121,33 @@ describe("Excel workbook", () => {
     expect(sheet.getCell(`B${nextMetadataRow}`).value).toBe("Test Case");
     expect(sheet.getCell(`D${nextMetadataRow}`).value).toBe("");
     expect(sheet.getCell(`D${nextMetadataRow + 1}`).value).toBe(1);
+  });
+
+  it("refines an uploaded existing test-case workbook without acceptance criteria", async () => {
+    const source = new ExcelJS.Workbook();
+    const sheet = source.addWorksheet("Sheet2");
+    sheet.columns = [
+      { header: "ID", key: "id" },
+      { header: "Work Item Type", key: "workItemType" },
+      { header: "Title", key: "title" },
+      { header: "Test Step", key: "testStep" },
+      { header: "Step Action", key: "stepAction" },
+      { header: "Step Expected", key: "stepExpected" }
+    ];
+    sheet.addRow({ workItemType: "Test Case", title: "POS-002: Login user" });
+    sheet.addRow({ testStep: 1, stepAction: "Open login page", stepExpected: "Login page is displayed" });
+    sheet.addRow({ testStep: 2, stepAction: "Enter username field", stepExpected: "Username value is displayed" });
+    sheet.addRow({ testStep: 3, stepAction: "Click login button", stepExpected: "Dashboard page is displayed" });
+    const sourceBuffer = await source.xlsx.writeBuffer();
+    const result = await buildRefinedWorkbook(sourceBuffer, "existing-cases.xlsx");
+    const refined = new ExcelJS.Workbook();
+    await refined.xlsx.load(result.buffer);
+    const adoSheet = refined.getWorksheet("Sheet2")!;
+    expect(adoSheet.getRow(1).values).toEqual([undefined, "ID", "Work Item Type", "Title", "Test Step", "Step Action", "Step Expected", "Area Path", "Assigned To", "State"]);
+    expect(String(adoSheet.getCell("C2").value)).toMatch(/^Verify /);
+    expect(String(adoSheet.getCell("C2").value)).not.toMatch(/^POS-\d{3}:/);
+    expect(adoSheet.getCell("D2").value).toBe("");
+    expect(adoSheet.getCell("D3").value).toBe(1);
+    expect(adoSheet.columnCount).toBe(9);
   });
 });

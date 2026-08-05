@@ -39,7 +39,7 @@ test("creates a generation and downloads Excel", async ({ page }, testInfo) => {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(savedPath);
   const sheet = workbook.getWorksheet("Sheet2")!;
-  expect(sheet.getRow(1).values).toEqual([undefined, "ID", "Work Item Type", "Title", "Test Step", "Step Action", "Step Expected", "Area Path", "Assigned To", "State", "Test Type", "AC", "Priority", "Actions"]);
+  expect(sheet.getRow(1).values).toEqual([undefined, "ID", "Work Item Type", "Title", "Test Step", "Step Action", "Step Expected", "Area Path", "Assigned To", "State"]);
   expect(sheet.getCell("B2").value).toBe("Test Case");
   expect(String(sheet.getCell("C2").value)).toContain("Verify account creation saves the account");
   expect(sheet.getCell("D2").value).toBe("");
@@ -51,7 +51,5 @@ test("creates a generation and downloads Excel", async ({ page }, testInfo) => {
   expect(sheet.getCell("G2").value).toBe("E2E Portal\\General");
   expect(sheet.getCell("H2").value).toBe("qa@example.com");
   expect(sheet.getCell("I2").value).toBe("Design");
-  expect(sheet.getCell("J2").value).toBe("Positive");
-  expect(sheet.getCell("K2").value).toBe("AC-001");
-  expect(sheet.getCell("L2").value).toBeTruthy();
+  expect(sheet.columnCount).toBe(9);
 });

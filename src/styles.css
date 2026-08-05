@@ -76,6 +76,7 @@ p { margin: 0; }
 .file-strip { border: 1px solid var(--line); background: #fafafa; border-radius: 12px; min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer; color: #374151; }
 .file-strip small { color: var(--muted); margin-left: auto; }
 .file-strip input, .tiny-file input { display: none; }
+.refine-upload { min-width: 300px; max-width: 420px; }
 .file-list { display: flex; gap: 8px; flex-wrap: wrap; }
 .file-list span { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 5px 7px 5px 10px; color: #374151; background: #fff; font-size: 13px; }
 .file-list button { width: 24px; min-height: 24px; padding: 0; border-radius: 999px; }
@@ -125,7 +126,7 @@ p { margin: 0; }
 .metric strong { font-size: 26px; }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
 .table-wrap { width: 100%; overflow: auto; border: 1px solid var(--line); border-radius: 14px; }
-table { width: 100%; border-collapse: collapse; min-width: 1280px; background: #fff; }
+table { width: 100%; border-collapse: collapse; min-width: 1040px; background: #fff; }
 th { background: #f9fafb; text-align: left; color: #374151; font-size: 13px; }
 th, td { border-bottom: 1px solid var(--line); padding: 10px; vertical-align: top; }
 .metadata-row td { background: #fbfaff; font-weight: 600; }

@@ -1,12 +1,12 @@
 import { createServer } from "node:http";
-import { mkdir, unlink } from "node:fs/promises";
+import { mkdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import multer, { type MulterError } from "multer";
 import { requirementSchema, generationConfigSchema, detectedElementSchema, testCaseSchema, generationSchema, type Generation } from "../src/lib/schemas";
 import { calculateCoverage, generateCases, inferElementsFromRequirement, newGenerationId, parseAcceptanceCriteria } from "../src/lib/analysis";
 import { ApiFailure, readJson, sanitizeFilename, sendJson } from "./lib/http";
 import { readDb, upsertGeneration, writeDb } from "./lib/store";
-import { buildFilename, buildWorkbook, type AzureExportConfig } from "./lib/excel";
+import { buildFilename, buildRefinedWorkbook, buildWorkbook, type AzureExportConfig } from "./lib/excel";
 import { buildHtmlFilename, buildHtmlReport } from "./lib/html";
 
 const port = Number(process.env.PORT ?? 8787);
@@ -25,6 +25,21 @@ const upload = multer({
   limits: { fileSize: maxUploadBytes, files: 8 },
   fileFilter: (_req, file, cb) => {
     if (!allowedTypes.has(file.mimetype)) cb(new Error("Unsupported image type. Upload PNG, JPG, JPEG, or WebP files."));
+    else cb(null, true);
+  }
+});
+
+const workbookUpload = multer({
+  storage: multer.diskStorage({
+    destination: async (_req, _file, cb) => {
+      await mkdir(uploadDir, { recursive: true });
+      cb(null, uploadDir);
+    },
+    filename: (_req, file, cb) => cb(null, `${Date.now()}-${sanitizeFilename(file.originalname)}`)
+  }),
+  limits: { fileSize: 20 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    if (!/\.(xlsx|xls)$/i.test(file.originalname)) cb(new Error("Upload an Excel workbook as .xlsx or .xls."));
     else cb(null, true);
   }
 });
@@ -50,6 +65,28 @@ const server = createServer(async (req, res) => {
           reference: `Screenshot ${index + 1}`
         }));
         sendJson(res, 200, { ok: true, data: { screenshots: files } });
+      });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/refine-existing-excel") {
+      return workbookUpload.single("workbook")(req as never, res as never, async (err: unknown) => {
+        if (err) return sendJson(res, 400, fail("UPLOAD_VALIDATION", (err as MulterError).message));
+        const file = (req as unknown as { file?: { originalname: string; path: string } }).file;
+        if (!file) return sendJson(res, 400, fail("UPLOAD_VALIDATION", "Upload an existing test-case Excel file."));
+        try {
+          const source = await readFile(file.path);
+          const result = await buildRefinedWorkbook(source, file.originalname);
+          await unlink(file.path).catch(() => undefined);
+          res.writeHead(200, {
+            "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "content-disposition": `attachment; filename="${result.filename}"`,
+            "access-control-allow-origin": "*"
+          });
+          return res.end(Buffer.from(result.buffer));
+        } catch (error) {
+          await unlink(file.path).catch(() => undefined);
+          return sendJson(res, 400, fail("REFINE_FAILED", error instanceof Error ? error.message : "Existing test-case refinement failed."));
+        }
       });
     }
 

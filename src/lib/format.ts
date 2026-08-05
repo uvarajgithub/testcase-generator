@@ -10,9 +10,6 @@ export type AzureCaseRow = {
   testStep: string | number;
   stepAction: string;
   stepExpected: string;
-  ac: string;
-  priority: string;
-  actions: string;
 };
 
 export function azureCaseRows(testCase: TestCase): AzureCaseRow[] {
@@ -22,10 +19,7 @@ export function azureCaseRows(testCase: TestCase): AzureCaseRow[] {
     title: scrubDocumentHeadingText(stripTitlePrefix(testCase.title)),
     testStep: "",
     stepAction: "",
-    stepExpected: "",
-    ac: testCase.acceptanceCriteriaId,
-    priority: testCase.priority,
-    actions: ""
+    stepExpected: ""
   };
   const stepRows = testCase.steps.map((step, index) => ({
     id: "",
@@ -33,10 +27,7 @@ export function azureCaseRows(testCase: TestCase): AzureCaseRow[] {
     title: "",
     testStep: index + 1,
     stepAction: scrubDocumentHeadingText(step),
-    stepExpected: scrubDocumentHeadingText(stepExpected(testCase, index)),
-    ac: "",
-    priority: "",
-    actions: ""
+    stepExpected: scrubDocumentHeadingText(stepExpected(testCase, index))
   }));
   return [metadataRow, ...stepRows];
 }
@@ -71,6 +62,11 @@ export function stepExpected(testCase: TestCase, stepIndex: number) {
   if (/attempt to edit the tna supervisor field/i.test(step)) return "The TNA Supervisor field cannot be changed by the lower-privilege user.";
   if (/^start\s+.+\s+form with\b/i.test(step)) return "The form contains valid data before the retry or interruption condition is applied.";
   if (/^interrupt\s+.+\s+submission\b/i.test(step)) return "The in-progress submission is stopped before a success state or duplicate record is created.";
+  if (/^prepare the dependent service condition/i.test(step)) return "The named backend service or dependency is configured with the required response condition.";
+  if (/^enter valid data in .+\s+form before triggering the dependency condition/i.test(step)) return "The named form contains valid field data before the dependency condition is triggered.";
+  if (/^simulate timeout from/i.test(step)) return "The named dependency timeout condition is active before the feature request is retried.";
+  if (/^return an error response from/i.test(step)) return "The named dependency returns a controlled error response for the submitted request.";
+  if (/^review returned .+ data, status, and persisted application state/i.test(step)) return "Returned data, visible status, and persisted application state are available for comparison.";
   if (/^focus\b/i.test(step) && /\bfields?\b/i.test(step)) return "The named field receives focus and exposes its validation-ready state.";
   if (/^replace\b/i.test(step) && /\bmalformed\b/i.test(step)) return "The corrected value replaces the malformed value in the named field.";
   if (/^correct the values\b/i.test(step) || /^correct the error\b/i.test(step)) return "The corrected values appear in the relevant fields and validation messages are ready to clear.";
@@ -115,14 +111,14 @@ export function validateAzureTestCases(testCases: TestCase[]) {
       if (row.id !== "") errors.push(`${testCase.id}: Azure ID column must be blank.`);
       if (index === 0) {
         if (row.testStep !== "" || row.stepAction !== "" || row.stepExpected !== "") errors.push(`${testCase.id}: metadata row must leave Test Step, Step Action, and Step Expected blank.`);
-        if (!row.workItemType || !row.title || !testCase.type || !row.ac || !row.priority) errors.push(`${testCase.id}: first row is missing required test-case metadata.`);
+        if (!row.workItemType || !row.title || !testCase.type || !testCase.priority) errors.push(`${testCase.id}: first row is missing required test-case metadata.`);
         return;
       }
       if (typeof row.testStep !== "number") errors.push(`${testCase.id}: Test Step must be numeric.`);
       if (row.testStep !== index) errors.push(`${testCase.id}: test steps must be sequential from 1.`);
       if (!row.stepAction.trim()) errors.push(`${testCase.id}: Step Action is required for step ${index}.`);
       if (!row.stepExpected.trim()) errors.push(`${testCase.id}: Step Expected is required for step ${index}.`);
-      if ([row.workItemType, row.title, row.ac, row.priority, row.actions].some(Boolean)) errors.push(`${testCase.id}: continuation row ${index + 1} contains test-case-level data.`);
+      if ([row.workItemType, row.title].some(Boolean)) errors.push(`${testCase.id}: continuation row ${index + 1} contains test-case-level data.`);
       if (!isSpecificAction(row.stepAction)) errors.push(`${testCase.id}: step ${index} must identify one concrete control, page, field, button, link, menu, or data condition.`);
       if (documentHeadingAsControlPattern.test(row.stepAction)) errors.push(`${testCase.id}: step ${index} must not use requirement document headings as controls or data.`);
       if (documentHeadingPattern.test(row.stepExpected)) errors.push(`${testCase.id}: step ${index} expected result must not use requirement document headings as the application subject.`);
@@ -139,11 +135,11 @@ export function validateAzureTestCases(testCases: TestCase[]) {
   return errors;
 }
 
-function stripTitlePrefix(value: string) {
+export function stripTitlePrefix(value: string) {
   return value.replace(/^\s*(?:POS|NEG|EDGE|VAL|TC|SEC|UI|A11Y|RESP|INT)-\d+\s*:\s*/i, "").trim();
 }
 
-function scrubDocumentHeadingText(value: string) {
+export function scrubDocumentHeadingText(value: string) {
   return value
     .replace(/\bBusiness Objective\b/gi, "business goal")
     .replace(/\bAcceptance Criteria\b/gi, "accepted behavior")

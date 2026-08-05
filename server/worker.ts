@@ -1,6 +1,6 @@
 import { calculateCoverage, generateCases, inferElementsFromRequirement, newGenerationId, parseAcceptanceCriteria } from "../src/lib/analysis";
 import { generationConfigSchema, generationSchema, requirementSchema, type Generation } from "../src/lib/schemas";
-import { buildFilename, buildWorkbook, type AzureExportConfig } from "./lib/excel";
+import { buildFilename, buildRefinedWorkbook, buildWorkbook, type AzureExportConfig } from "./lib/excel";
 import { buildHtmlFilename, buildHtmlReport } from "./lib/html";
 import { STATIC_ASSETS } from "./generated-assets";
 
@@ -32,6 +32,20 @@ export default {
               size: file.size,
               reference: `Screenshot ${index + 1}`
             }))
+          }
+        });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/refine-existing-excel") {
+        const form = await request.formData();
+        const file = form.get("workbook");
+        if (!(file instanceof File)) return json(fail("UPLOAD_VALIDATION", "Upload an existing test-case Excel file."), 400);
+        if (!/\.(xlsx|xls)$/i.test(file.name)) return json(fail("UPLOAD_VALIDATION", "Upload an Excel workbook as .xlsx or .xls."), 400);
+        const result = await buildRefinedWorkbook(await file.arrayBuffer(), file.name);
+        return new Response(result.buffer, {
+          headers: {
+            "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "content-disposition": `attachment; filename="${result.filename}"`
           }
         });
       }
