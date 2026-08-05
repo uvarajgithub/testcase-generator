@@ -69,6 +69,13 @@ const allowedMimeTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
 const lowConfidenceThreshold = 0.65;
 const reliableConfidenceThreshold = 0.65;
 
+const confidenceSchema = z.preprocess((value) => {
+  const numeric = typeof value === "string" ? Number(value.replace("%", "").trim()) : value;
+  if (typeof numeric !== "number" || Number.isNaN(numeric)) return undefined;
+  if (numeric > 1 && numeric <= 100) return numeric / 100;
+  return numeric;
+}, z.number().min(0).max(1));
+
 const visionControlSchema = z.object({
   label: z.string().default(""),
   type: z.string().default("control"),
@@ -76,13 +83,13 @@ const visionControlSchema = z.object({
   selectedValue: z.string().nullable().default(null),
   defaultValue: z.string().nullable().default(null),
   enabled: z.boolean().default(true),
-  confidence: z.number().min(0).max(1).default(0.5),
+  confidence: confidenceSchema.default(0.5),
   source: z.string().default("screenshot-vision")
 });
 
 const visionResultSchema = z.object({
   analysisMode: z.string().default("vision-assisted"),
-  screenshotType: z.enum(["application_screen", "requirement_document", "work_item_screen", "excel_output", "design_mockup", "unknown"]),
+  screenshotType: z.preprocess(normalizeScreenshotType, z.enum(["application_screen", "requirement_document", "work_item_screen", "excel_output", "design_mockup", "unknown"])),
   screenName: z.string().default(""),
   navigation: z.array(z.string()).default([]),
   controls: z.array(visionControlSchema).default([]),
@@ -97,7 +104,7 @@ const visionResultSchema = z.object({
   uiRequirements: z.array(z.string()).default([]),
   dependencies: z.array(z.string()).default([]),
   warnings: z.array(z.string()).default([]),
-  overallConfidence: z.number().min(0).max(1).default(0)
+  overallConfidence: confidenceSchema.default(0)
 });
 
 type VisionResult = z.infer<typeof visionResultSchema>;
@@ -246,7 +253,7 @@ async function tryGeminiVision(input: {
       role: "user",
       parts: [
         { text: visionPrompt(input.requirement, input.userStory, input.additionalContext, input.userCorrections) },
-        { inlineData: { mimeType: input.screenshot.mimeType, data: base64(input.screenshot.data) } }
+        { inline_data: { mime_type: input.screenshot.mimeType, data: base64(input.screenshot.data) } }
       ]
     }],
     generationConfig: {
@@ -267,11 +274,11 @@ async function tryGeminiVision(input: {
     const payload = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
     const text = payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("").trim() ?? "";
     if (!text) return { result: null, warning: "Gemini Vision returned an empty analysis." };
-    const parsed = safeJson(text);
+    const parsed = normalizeVisionPayload(safeJson(text));
     const result = visionResultSchema.parse(parsed);
     return { result };
-  } catch {
-    return { result: null, warning: "Gemini Vision was unavailable or returned invalid structured output." };
+  } catch (error) {
+    return { result: null, warning: geminiParseFailure(error) };
   }
 }
 
@@ -450,7 +457,113 @@ ${userCorrections}`;
 
 function safeJson(value: string) {
   const trimmed = value.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
-  return JSON.parse(trimmed);
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const start = trimmed.indexOf("{");
+    const end = trimmed.lastIndexOf("}");
+    if (start >= 0 && end > start) return JSON.parse(trimmed.slice(start, end + 1));
+    throw new Error("Gemini did not return JSON.");
+  }
+}
+
+function normalizeVisionPayload(value: unknown) {
+  if (Array.isArray(value)) return normalizeVisionPayload(value[0] ?? {});
+  if (!value || typeof value !== "object") return value;
+  const source = value as Record<string, unknown>;
+  const normalized: Record<string, unknown> = {};
+  Object.entries(source).forEach(([key, item]) => {
+    normalized[toCamelKey(key)] = item;
+  });
+  normalized.screenshotType = normalizeScreenshotType(normalized.screenshotType ?? normalized.type ?? normalized.screenType);
+  normalized.screenName = stringValue(normalized.screenName ?? normalized.screen ?? normalized.pageName);
+  normalized.navigation = stringArray(normalized.navigation);
+  normalized.sections = stringArray(normalized.sections);
+  normalized.roles = stringArray(normalized.roles);
+  normalized.entities = stringArray(normalized.entities);
+  normalized.states = stringArray(normalized.states);
+  normalized.visibleText = stringArray(normalized.visibleText ?? normalized.text);
+  normalized.validationMessages = stringArray(normalized.validationMessages);
+  normalized.businessRules = stringArray(normalized.businessRules);
+  normalized.uiRequirements = stringArray(normalized.uiRequirements);
+  normalized.dependencies = stringArray(normalized.dependencies);
+  normalized.warnings = stringArray(normalized.warnings);
+  normalized.controls = normalizeControls(normalized.controls ?? normalized.fields ?? normalized.uiControls);
+  if (normalized.overallConfidence == null) normalized.overallConfidence = normalized.confidence ?? 0.7;
+  return normalized;
+}
+
+function normalizeControls(value: unknown) {
+  const items = Array.isArray(value) ? value : value ? [value] : [];
+  return items
+    .map((item) => {
+      if (typeof item === "string") return { label: item, type: inferControlType(item), confidence: 0.75 };
+      if (!item || typeof item !== "object") return null;
+      const source = item as Record<string, unknown>;
+      const normalized: Record<string, unknown> = {};
+      Object.entries(source).forEach(([key, entry]) => {
+        normalized[toCamelKey(key)] = entry;
+      });
+      normalized.label = stringValue(normalized.label ?? normalized.name ?? normalized.text ?? normalized.caption);
+      normalized.type = stringValue(normalized.type ?? normalized.controlType ?? inferControlType(normalized.label));
+      normalized.options = stringArray(normalized.options);
+      normalized.selectedValue = nullableString(normalized.selectedValue ?? normalized.selected);
+      normalized.defaultValue = nullableString(normalized.defaultValue ?? normalized.default);
+      normalized.source = stringValue(normalized.source) || "screenshot-vision";
+      if (normalized.confidence == null) normalized.confidence = 0.75;
+      return normalized.label ? normalized : null;
+    })
+    .filter(Boolean);
+}
+
+function normalizeScreenshotType(value: unknown): string {
+  const text = stringValue(value).toLowerCase().replace(/[\s-]+/g, "_");
+  if (/requirement|document|story|spec/.test(text)) return "requirement_document";
+  if (/work_item|azure|jira/.test(text)) return "work_item_screen";
+  if (/excel|spreadsheet|export/.test(text)) return "excel_output";
+  if (/mockup|design|wireframe/.test(text)) return "design_mockup";
+  if (/application|app|screen|page|form|ui/.test(text)) return "application_screen";
+  return "unknown";
+}
+
+function toCamelKey(value: string): string {
+  return value.replace(/[_-]([a-z])/g, (_, letter: string) => letter.toUpperCase());
+}
+
+function stringArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap((item) => stringArray(item));
+  if (typeof value === "string") return value.split(/\n|,/).map((item) => item.trim()).filter(Boolean);
+  if (value == null) return [];
+  return [String(value).trim()].filter(Boolean);
+}
+
+function stringValue(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function nullableString(value: unknown): string | null {
+  const text = stringValue(value);
+  return text || null;
+}
+
+function inferControlType(value: unknown): string {
+  const text = stringValue(value);
+  if (/button|save|submit|cancel|add|new/i.test(text)) return "button";
+  if (/dropdown|status|type|workflow|select/i.test(text)) return "dropdown";
+  if (/radio|yes|no/i.test(text)) return "radio";
+  if (/checkbox/i.test(text)) return "checkbox";
+  if (/lookup|search/i.test(text)) return "lookup";
+  if (/link|url/i.test(text)) return "link";
+  return "field";
+}
+
+function geminiParseFailure(error: unknown): string {
+  if (error instanceof z.ZodError) {
+    const reason = error.issues.slice(0, 2).map((issue) => `${issue.path.join(".") || "response"} ${issue.message}`).join("; ");
+    return `Gemini Vision returned structured output that needed unsupported fields: ${reason}.`;
+  }
+  if (error instanceof SyntaxError) return "Gemini Vision returned non-JSON output.";
+  return "Gemini Vision was unavailable or returned invalid structured output.";
 }
 
 function sanitizedProviderFailure(status: number) {

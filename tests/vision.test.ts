@@ -29,31 +29,38 @@ describe("Gemini Vision analysis", () => {
   });
 
   it("parses valid Gemini JSON and filters document headings as controls", async () => {
+    let requestBody: unknown;
     const fetchImpl = async () => new Response(JSON.stringify({
       candidates: [{ content: { parts: [{ text: JSON.stringify({
-        analysisMode: "vision-assisted",
-        screenshotType: "application_screen",
-        screenName: "New User Group",
+        analysis_mode: "vision-assisted",
+        screenshot_type: "application screen",
+        screen_name: "New User Group",
         navigation: ["User Groups", "New User Group"],
         controls: [
-          { label: "TNA Supervisor", type: "radio-group", options: ["Yes", "No"], selectedValue: "No", defaultValue: "No", enabled: true, confidence: 0.96, source: "screenshot-vision" },
-          { label: "Save", type: "button", options: [], selectedValue: null, defaultValue: null, enabled: true, confidence: 0.94, source: "screenshot-vision" },
-          { label: "Business Objective", type: "field", options: [], selectedValue: null, defaultValue: null, enabled: true, confidence: 0.99, source: "screenshot-vision" }
+          { label: "TNA Supervisor", type: "radio-group", options: ["Yes", "No"], selected_value: "No", default_value: "No", enabled: true, confidence: 96, source: "screenshot-vision" },
+          { label: "Save", type: "button", options: [], selected_value: null, default_value: null, enabled: true, confidence: "94%", source: "screenshot-vision" },
+          { label: "Business Objective", type: "field", options: [], selected_value: null, default_value: null, enabled: true, confidence: 99, source: "screenshot-vision" }
         ],
         visibleText: [],
         validationMessages: [],
         tables: [],
         businessRules: [],
         warnings: [],
-        overallConfidence: 0.94
+        overall_confidence: 94
       }) }] } }]
     }));
+    const fetchImplWithCapture: typeof fetch = async (_url, init) => {
+      requestBody = JSON.parse(String(init?.body ?? "{}"));
+      return fetchImpl();
+    };
     const result = await analyseScreenshots({
       requirement,
       screenshots: [{ id: "SS-1", filename: "new-user-group.png", mimeType: "image/png", data: png }],
       env: { GEMINI_API_KEY: "secret", ENABLE_GEMINI_VISION: "true" },
-      fetchImpl
+      fetchImpl: fetchImplWithCapture
     });
+    expect(JSON.stringify(requestBody)).toContain("inline_data");
+    expect(JSON.stringify(requestBody)).toContain("mime_type");
     expect(result.summary.generationMode).toBe("Gemini Vision-assisted");
     expect(result.reports[0].status).toBe("Vision analysed");
     expect(result.reports[0].findings.some((finding) => finding.value.includes("TNA Supervisor") && finding.usedInCoverage)).toBe(true);
