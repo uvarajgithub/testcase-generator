@@ -125,6 +125,9 @@ p { margin: 0; }
 .metric span, .mini-card span { color: var(--muted); font-size: 13px; }
 .metric strong { font-size: 26px; }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.detected-panel { border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 10px; background: #fff; }
+.detected-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
+.detected-card { border-radius: 8px; }
 .table-wrap { width: 100%; overflow: auto; border: 1px solid var(--line); border-radius: 14px; }
 table { width: 100%; border-collapse: collapse; min-width: 1040px; background: #fff; }
 th { background: #f9fafb; text-align: left; color: #374151; font-size: 13px; }

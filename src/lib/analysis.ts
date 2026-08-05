@@ -409,7 +409,7 @@ export function generateCases(generation: Pick<Generation, "requirement" | "crit
   const counts: Partial<Record<TestCase["type"], number>> = {};
   const cases: TestCase[] = [];
   const selected = generation.config.selectedTypes;
-  const criteria = expandedCriteriaForGeneration(generation.requirement, generation.criteria);
+  const criteria = expandedCriteriaForGeneration(generation.requirement, generation.criteria, generation.detectedElements);
   for (const criterion of criteria) {
     for (const type of selected) {
       if (cases.length >= generation.config.maxCases) break;
@@ -425,7 +425,7 @@ export function generateCases(generation: Pick<Generation, "requirement" | "crit
   return removeDuplicates(cases);
 }
 
-function expandedCriteriaForGeneration(requirement: RequirementInput, criteria: AcceptanceCriterion[]) {
+function expandedCriteriaForGeneration(requirement: RequirementInput, criteria: AcceptanceCriterion[], detectedElements: DetectedElement[] = []) {
   const byText = new Map<string, AcceptanceCriterion>();
   criteria.forEach((criterion) => byText.set(criterion.text.toLowerCase(), criterion));
   const sourceLines = [
@@ -450,6 +450,16 @@ function expandedCriteriaForGeneration(requirement: RequirementInput, criteria: 
       }
     });
   }
+  detectedElements
+    .filter((element) => element.confidence >= 0.85)
+    .filter((element) => !/requirement_document|work_item_screen|excel_output|unknown/i.test(element.type))
+    .filter((element) => !isDocumentHeading(element.label))
+    .forEach((element) => {
+      const line = `${element.label} ${element.type} is visible on ${requirement.featureName} with ${element.visibleText || "the expected state"} for the user workflow`;
+      if (byText.has(line.toLowerCase())) return;
+      const parsed = parseAcceptanceCriteria(line)[0];
+      if (parsed) byText.set(line.toLowerCase(), { ...parsed, id: `UIAC-${String(byText.size + 1).padStart(3, "0")}` });
+    });
   return Array.from(byText.values());
 }
 

@@ -3,6 +3,7 @@ import { generationConfigSchema, generationSchema, requirementSchema, type Gener
 import { buildFilename, buildRefinedWorkbook, buildWorkbook, type AzureExportConfig } from "./lib/excel";
 import { buildHtmlFilename, buildHtmlReport } from "./lib/html";
 import { STATIC_ASSETS } from "./generated-assets";
+import { analyseScreenshots, publicVisionStatus } from "./lib/vision";
 
 type Env = Record<string, unknown>;
 type ApiFailure = { ok: false; error: { code: string; message: string; details?: unknown } };
@@ -16,7 +17,7 @@ export default {
       const url = new URL(request.url);
 
       if (url.pathname === "/api/health") {
-        return json({ ok: true, data: { status: "ok", aiConfigured: false } });
+        return json({ ok: true, data: { status: "ok", aiConfigured: false, ...publicVisionStatus(env) } });
       }
 
       if (request.method === "POST" && url.pathname === "/api/screenshots") {
@@ -34,6 +35,27 @@ export default {
             }))
           }
         });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/screenshots/analyse") {
+        const form = await request.formData();
+        const requirement = requirementSchema.parse(JSON.parse(String(form.get("requirement") ?? "{}")));
+        const files = form.getAll("screenshots").filter((item): item is File => item instanceof File);
+        const screenshots = await Promise.all(files.map(async (file, index) => ({
+          id: `SS-${String(index + 1).padStart(3, "0")}-${Date.now()}`,
+          filename: file.name,
+          mimeType: file.type || "image/png",
+          data: new Uint8Array(await file.arrayBuffer())
+        })));
+        const data = await analyseScreenshots({
+          requirement,
+          screenshots,
+          userStory: String(form.get("userStory") ?? ""),
+          additionalContext: String(form.get("additionalContext") ?? ""),
+          userCorrections: String(form.get("userCorrections") ?? ""),
+          env
+        });
+        return json({ ok: true, data });
       }
 
       if (request.method === "POST" && url.pathname === "/api/refine-existing-excel") {

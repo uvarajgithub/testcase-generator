@@ -8,6 +8,7 @@ import { ApiFailure, readJson, sanitizeFilename, sendJson } from "./lib/http";
 import { readDb, upsertGeneration, writeDb } from "./lib/store";
 import { buildFilename, buildRefinedWorkbook, buildWorkbook, type AzureExportConfig } from "./lib/excel";
 import { buildHtmlFilename, buildHtmlReport } from "./lib/html";
+import { analyseScreenshots, publicVisionStatus } from "./lib/vision";
 
 const port = Number(process.env.PORT ?? 8787);
 const uploadDir = join(process.cwd(), "server", "data", "uploads");
@@ -44,13 +45,22 @@ const workbookUpload = multer({
   }
 });
 
+const analysisUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: maxUploadBytes, files: 8 },
+  fileFilter: (_req, file, cb) => {
+    if (!allowedTypes.has(file.mimetype)) cb(new Error("Unsupported image type. Upload PNG, JPG, JPEG, or WebP files."));
+    else cb(null, true);
+  }
+});
+
 const server = createServer(async (req, res) => {
   try {
     if (req.method === "OPTIONS") return sendJson(res, 204, { ok: true, data: null });
     const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
 
     if (req.method === "GET" && url.pathname === "/api/health") {
-      return sendJson(res, 200, { ok: true, data: { status: "ok", aiConfigured: Boolean(process.env.AI_API_KEY) } });
+      return sendJson(res, 200, { ok: true, data: { status: "ok", aiConfigured: Boolean(process.env.AI_API_KEY), ...publicVisionStatus() } });
     }
 
     if (req.method === "POST" && url.pathname === "/api/screenshots") {
@@ -65,6 +75,32 @@ const server = createServer(async (req, res) => {
           reference: `Screenshot ${index + 1}`
         }));
         sendJson(res, 200, { ok: true, data: { screenshots: files } });
+      });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/screenshots/analyse") {
+      return analysisUpload.array("screenshots")(req as never, res as never, async (err: unknown) => {
+        if (err) return sendJson(res, 400, fail("UPLOAD_VALIDATION", (err as MulterError).message));
+        try {
+          const body = (req as unknown as { body?: Record<string, string>; files?: Array<{ originalname: string; mimetype: string; buffer: Buffer }> }).body ?? {};
+          const requirement = requirementSchema.parse(JSON.parse(body.requirement || "{}"));
+          const files = ((req as unknown as { files?: Array<{ originalname: string; mimetype: string; buffer: Buffer }> }).files ?? []).map((file, index) => ({
+            id: `SS-${String(index + 1).padStart(3, "0")}-${Date.now()}`,
+            filename: file.originalname,
+            mimeType: file.mimetype,
+            data: new Uint8Array(file.buffer)
+          }));
+          const data = await analyseScreenshots({
+            requirement,
+            screenshots: files,
+            userStory: body.userStory,
+            additionalContext: body.additionalContext,
+            userCorrections: body.userCorrections
+          });
+          return sendJson(res, 200, { ok: true, data });
+        } catch (error) {
+          return sendJson(res, 400, fail("SCREENSHOT_ANALYSIS_FAILED", error instanceof Error ? error.message : "Screenshot analysis failed."));
+        }
       });
     }
 
@@ -196,7 +232,7 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/api/settings") {
       const db = await readDb();
-      return sendJson(res, 200, { ok: true, data: { settings: db.settings, aiConfigured: Boolean(process.env.AI_API_KEY) } });
+      return sendJson(res, 200, { ok: true, data: { settings: db.settings, aiConfigured: Boolean(process.env.AI_API_KEY), ...publicVisionStatus() } });
     }
 
     if (req.method === "PUT" && url.pathname === "/api/settings") {

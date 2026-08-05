@@ -2,7 +2,7 @@ import { AlertCircle, Check, Copy, Edit3, ExternalLink, FileSpreadsheet, Filter,
 import { useEffect, useRef, useState } from "react";
 import { Shell } from "./components/Shell";
 import { Field } from "./components/Field";
-import { api } from "./lib/api";
+import { api, type VisionSummary } from "./lib/api";
 import { calculateCoverage, inferRequirementModel, isDocumentHeading, normalizeRequirementText } from "./lib/analysis";
 import { azureCaseRows, validateAzureTestCases } from "./lib/format";
 import { generationConfigSchema, priorities, testTypes, type CoverageSummary, type Generation, type GenerationConfig, type RequirementInput, type TestCase } from "./lib/schemas";
@@ -40,7 +40,7 @@ type AzureConfig = { areaPath: string; assignedTo: string; state: string };
 export function App() {
   const [active, setActive] = useState("Generate");
   const [generations, setGenerations] = useState<Generation[]>([]);
-  const [health, setHealth] = useState<{ aiConfigured: boolean } | null>(null);
+  const [health, setHealth] = useState<{ aiConfigured: boolean; visionConfigured?: boolean; model?: string } | null>(null);
   const [message, setMessage] = useState("");
   const [requirement, setRequirement] = useState<RequirementInput>(emptyRequirement);
   const [requirementFiles, setRequirementFiles] = useState<ReqFile[]>([]);
@@ -52,11 +52,15 @@ export function App() {
   const [error, setError] = useState("");
   const [progress, setProgress] = useState<string[]>([]);
   const [azureConfig, setAzureConfig] = useState<AzureConfig>({ areaPath: "", assignedTo: "", state: "Design" });
+  const [screenshotFiles, setScreenshotFiles] = useState<Record<string, File>>({});
+  const [detectedElements, setDetectedElements] = useState<Generation["detectedElements"]>([]);
+  const [visionSummary, setVisionSummary] = useState<VisionSummary | null>(null);
+  const [ignoreScreenshotData, setIgnoreScreenshotData] = useState(false);
   const generatingRef = useRef(false);
 
   useEffect(() => {
     void refresh();
-    api.health().then(setHealth).catch(() => setHealth({ aiConfigured: false }));
+    api.health().then(setHealth).catch(() => setHealth({ aiConfigured: false, visionConfigured: false }));
   }, []);
 
   async function refresh() {
@@ -90,6 +94,10 @@ export function App() {
       const data = await api.uploadScreenshots(selected);
       const withPreviews = data.screenshots.map((shot, index) => ({ ...shot, dataUrl: URL.createObjectURL(selected[index]) }));
       setScreenshots((prev) => [...prev, ...withPreviews]);
+      setScreenshotFiles((prev) => ({ ...prev, ...Object.fromEntries(data.screenshots.map((shot, index) => [shot.id, selected[index]])) }));
+      setDetectedElements([]);
+      setVisionSummary(null);
+      setIgnoreScreenshotData(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Screenshot upload failed. Check file type and size.");
     } finally {
@@ -106,11 +114,22 @@ export function App() {
     setError("");
     setProgress(["Analysing acceptance criteria"]);
     try {
-      const analysis = await api.analyze(prepared, screenshots).catch((err) => {
+      let analysis = await api.analyze(prepared, screenshots).catch((err) => {
         setError(err instanceof Error ? `Screenshot or input analysis warning: ${err.message}. Continuing with acceptance criteria.` : "Analysis warning. Continuing with acceptance criteria.");
         return { criteria: [], detectedElements: [], warnings: ["Analysis fallback used."], assumptions: ["Analysis could not complete; generation continued with available requirement text."], ambiguities: [] };
       });
-      if (screenshots.length) setProgress((items) => [...items, "Reviewing screenshots"]);
+      const files = screenshots.map((shot) => screenshotFiles[shot.id]).filter((file): file is File => Boolean(file));
+      if (files.length && !ignoreScreenshotData) {
+        setProgress((items) => [...items, detectedElements.length ? "Using confirmed screenshot elements" : "Analysing screenshots with Gemini Vision"]);
+        if (!detectedElements.length) {
+          const visual = await analyseUploadedScreenshots(prepared, files);
+          analysis = visual;
+        } else {
+          analysis = { ...analysis, detectedElements, assumptions: [...analysis.assumptions, "User-confirmed screenshot elements were used for generation."] };
+        }
+      } else if (screenshots.length) {
+        setProgress((items) => [...items, "Generating from requirement text only"]);
+      }
       setProgress((items) => [...items, "Generating positive, negative and edge cases"]);
       const data = await api.saveGeneration({
         id: generation?.id,
@@ -119,7 +138,7 @@ export function App() {
         requirement: prepared,
         criteria: analysis.criteria,
         screenshots,
-        detectedElements: analysis.detectedElements,
+        detectedElements: ignoreScreenshotData ? [] : analysis.detectedElements,
         config,
         assumptions: [...analysis.assumptions, ...(health?.aiConfigured ? [] : ["AI unavailable or not configured; deterministic fallback generation used."])],
         warnings: analysis.warnings,
@@ -136,6 +155,25 @@ export function App() {
       setError(err instanceof Error ? err.message : "Generation failed. You can retry or add manual test cases after creating a draft.");
     } finally {
       generatingRef.current = false;
+      setBusy("");
+    }
+  }
+
+  async function analyseUploadedScreenshots(sourceRequirement = requirement, files = screenshots.map((shot) => screenshotFiles[shot.id]).filter((file): file is File => Boolean(file))) {
+    if (!files.length) throw new Error("Upload screenshots before analysing them.");
+    setBusy("Analysing screenshots");
+    setError("");
+    try {
+      const prepared = sourceRequirement.acceptanceCriteria.trim() ? withDefaults(sourceRequirement, requirementFiles) : sourceRequirement;
+      const analysis = await api.analyzeScreenshots(prepared, files);
+      setDetectedElements(analysis.detectedElements);
+      setVisionSummary(analysis.summary);
+      setMessage(`${analysis.summary.generationMode}: ${analysis.detectedElements.length} detected elements ready for review.`);
+      return analysis;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Screenshot analysis failed.");
+      throw err;
+    } finally {
       setBusy("");
     }
   }
@@ -221,6 +259,12 @@ export function App() {
             screenshots={screenshots}
             setScreenshots={setScreenshots}
             uploadScreenshots={uploadScreenshots}
+            analyseUploadedScreenshots={() => void analyseUploadedScreenshots()}
+            detectedElements={detectedElements}
+            setDetectedElements={setDetectedElements}
+            visionSummary={visionSummary}
+            ignoreScreenshotData={ignoreScreenshotData}
+            setIgnoreScreenshotData={setIgnoreScreenshotData}
             config={config}
             setConfig={setConfig}
             generate={generate}
@@ -251,6 +295,12 @@ function GenerateTab(props: {
   screenshots: Generation["screenshots"];
   setScreenshots: (s: Generation["screenshots"]) => void;
   uploadScreenshots: (files: FileList | null) => void;
+  analyseUploadedScreenshots: () => void;
+  detectedElements: Generation["detectedElements"];
+  setDetectedElements: (items: Generation["detectedElements"]) => void;
+  visionSummary: VisionSummary | null;
+  ignoreScreenshotData: boolean;
+  setIgnoreScreenshotData: (value: boolean) => void;
   config: GenerationConfig;
   setConfig: (c: GenerationConfig) => void;
   generate: () => void;
@@ -258,7 +308,7 @@ function GenerateTab(props: {
   busy: string;
   progress: string[];
 }) {
-  const { requirement, setRequirement, requirementFiles, setRequirementFiles, uploadRequirementFiles, screenshots, setScreenshots, uploadScreenshots, config, setConfig, generate, refineExistingExcel, busy, progress } = props;
+  const { requirement, setRequirement, requirementFiles, setRequirementFiles, uploadRequirementFiles, screenshots, setScreenshots, uploadScreenshots, analyseUploadedScreenshots, detectedElements, setDetectedElements, visionSummary, ignoreScreenshotData, setIgnoreScreenshotData, config, setConfig, generate, refineExistingExcel, busy, progress } = props;
   const [sourceMode, setSourceMode] = useState<"Manual Entry" | "Upload Requirement">("Manual Entry");
   const [existingCaseFile, setExistingCaseFile] = useState<File | null>(null);
   const update = (key: keyof RequirementInput, value: string) => setRequirement({ ...requirement, [key]: value });
@@ -340,6 +390,17 @@ function GenerateTab(props: {
             </article>
           ))}
         </div>
+        {screenshots.length > 0 && (
+          <DetectedElementsReview
+            elements={detectedElements}
+            setElements={setDetectedElements}
+            summary={visionSummary}
+            onAnalyse={analyseUploadedScreenshots}
+            busy={busy}
+            ignore={ignoreScreenshotData}
+            setIgnore={setIgnoreScreenshotData}
+          />
+        )}
       </section>
 
       <section className="form-section generation-row">
@@ -479,6 +540,75 @@ function CoverageTab({ generation, coverage, exportExcel, openHtml, azureConfig,
         <TraceList title="Screenshot elements covered" items={coverage.coveredElements.length ? coverage.coveredElements : ["No screenshot-derived elements covered yet"]} />
       </div>
     </article>
+  );
+}
+
+function DetectedElementsReview({ elements, setElements, summary, onAnalyse, busy, ignore, setIgnore }: {
+  elements: Generation["detectedElements"];
+  setElements: (items: Generation["detectedElements"]) => void;
+  summary: VisionSummary | null;
+  onAnalyse: () => void;
+  busy: string;
+  ignore: boolean;
+  setIgnore: (value: boolean) => void;
+}) {
+  const updateElement = (id: string, patch: Partial<Generation["detectedElements"][number]>) => setElements(elements.map((item) => item.id === id ? { ...item, ...patch } : item));
+  const addElement = () => setElements([...elements, {
+    id: `UI-MAN-${String(elements.length + 1).padStart(3, "0")}`,
+    screenshotId: "manual",
+    screenshotName: "User correction",
+    type: "field",
+    label: "New control",
+    visibleText: "",
+    relatedAcceptanceCriterionId: undefined,
+    confidence: 0.9,
+    userCorrection: "Added by user",
+    notes: "User-confirmed screenshot element.",
+    assumption: ""
+  }]);
+  return (
+    <section className="detected-panel">
+      <div className="section-title">
+        <div>
+          <h2>Detected screenshot elements</h2>
+          <p className="muted">Review and confirm visual evidence before generation. Acceptance criteria still remain the primary source.</p>
+        </div>
+        <div className="actions">
+          <label className="check"><input type="checkbox" checked={ignore} onChange={(e) => setIgnore(e.target.checked)} />Generate from requirement only</label>
+          <button onClick={onAnalyse} disabled={Boolean(busy)}><Search size={16} />Analyse screenshots</button>
+          <button onClick={addElement}><Plus size={16} />Add control</button>
+        </div>
+      </div>
+      {summary && (
+        <div className="summary-chips">
+          <Chip label="Mode" value={summary.generationMode} />
+          <Chip label="Screenshots" value={summary.screenshotsUploaded} />
+          <Chip label="Gemini" value={summary.geminiVisionAnalysed} />
+          <Chip label="OCR" value={summary.ocrAnalysed} />
+          <Chip label="Failed" value={summary.failedScreenshots} />
+          <Chip label="Confidence" value={`${summary.averageConfidence}%`} />
+        </div>
+      )}
+      {summary?.warnings.map((warning) => <Notice key={warning} type={summary.generationMode === "Gemini Vision-assisted" ? "info" : "warn"} text={warning} />)}
+      {elements.length ? (
+        <div className="detected-grid">
+          {elements.map((element) => (
+            <article className="mini-card detected-card" key={element.id}>
+              <div className="grid two">
+                <Field label="Label"><input value={element.label} onChange={(e) => updateElement(element.id, { label: e.target.value, userCorrection: "Edited by user" })} /></Field>
+                <Field label="Control type"><input value={element.type} onChange={(e) => updateElement(element.id, { type: e.target.value, userCorrection: "Edited by user" })} /></Field>
+              </div>
+              <Field label="Visible details"><input value={element.visibleText} onChange={(e) => updateElement(element.id, { visibleText: e.target.value, userCorrection: "Edited by user" })} /></Field>
+              <div className="summary-chips">
+                <span className="summary-chip"><strong>{Math.round(element.confidence * 100)}%</strong>Confidence</span>
+                <span className="summary-chip"><strong>{element.screenshotName}</strong>Source</span>
+              </div>
+              <div className="actions"><button onClick={() => setElements(elements.filter((item) => item.id !== element.id))}><Trash2 size={16} />Remove</button></div>
+            </article>
+          ))}
+        </div>
+      ) : <Empty text="No detected elements yet. Analyse screenshots or generate from requirement text only." />}
+    </section>
   );
 }
 

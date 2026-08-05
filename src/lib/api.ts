@@ -1,6 +1,16 @@
 import type { AcceptanceCriterion, CoverageSummary, DetectedElement, Generation, GenerationConfig, RequirementInput } from "./schemas";
 
 type ApiResponse<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string } };
+export type VisionSummary = {
+  requirementTextAnalysed: boolean;
+  screenshotsUploaded: number;
+  geminiVisionAnalysed: number;
+  ocrAnalysed: number;
+  failedScreenshots: number;
+  generationMode: "Gemini Vision-assisted" | "OCR-assisted" | "Requirement text only";
+  averageConfidence: number;
+  warnings: string[];
+};
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, headers: init?.body instanceof FormData ? init.headers : { "content-type": "application/json", ...init?.headers } });
@@ -14,7 +24,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  health: () => request<{ status: string; aiConfigured: boolean }>("/api/health"),
+  health: () => request<{ status: string; aiConfigured: boolean; visionConfigured: boolean; visionEnabled: boolean; ocrFallbackEnabled: boolean; model: string }>("/api/health"),
   uploadScreenshots: async (files: File[]) => {
     const form = new FormData();
     files.forEach((file) => form.append("screenshots", file));
@@ -25,6 +35,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ requirement, screenshots })
     }),
+  analyzeScreenshots: (requirement: RequirementInput, screenshots: File[], options?: { userStory?: string; additionalContext?: string; userCorrections?: string }) => {
+    const form = new FormData();
+    form.append("requirement", JSON.stringify(requirement));
+    form.append("userStory", options?.userStory ?? requirement.requirementTitle);
+    form.append("additionalContext", options?.additionalContext ?? requirement.businessRules);
+    form.append("userCorrections", options?.userCorrections ?? "");
+    screenshots.forEach((file) => form.append("screenshots", file));
+    return request<{ criteria: AcceptanceCriterion[]; detectedElements: DetectedElement[]; warnings: string[]; assumptions: string[]; ambiguities: string[]; summary: VisionSummary }>("/api/screenshots/analyse", {
+      method: "POST",
+      body: form
+    });
+  },
   saveGeneration: (payload: Partial<Generation> & { requirement: RequirementInput; config: GenerationConfig }) =>
     request<{ generation: Generation; coverage: CoverageSummary }>("/api/generations", { method: "POST", body: JSON.stringify(payload) }),
   updateGeneration: (generation: Generation) =>
