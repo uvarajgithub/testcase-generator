@@ -36,10 +36,27 @@ const defaultConfig: GenerationConfig = generationConfigSchema.parse({
 
 type ReqFile = { name: string; size: number; type: string };
 type AzureConfig = { areaPath: string; assignedTo: string; state: string };
+type TestCaseWorkflow = "Generate New" | "Review & Refine" | "Review Coverage";
+
+const workflowCopy: Record<TestCaseWorkflow, { title: string; subtitle: string }> = {
+  "Generate New": {
+    title: "Generate Test Cases",
+    subtitle: "Create detailed test cases from requirements and screenshots."
+  },
+  "Review & Refine": {
+    title: "Review and Refine Test Cases",
+    subtitle: "Improve the quality and consistency of an existing test-case workbook."
+  },
+  "Review Coverage": {
+    title: "Review Test Coverage",
+    subtitle: "Compare requirements with existing tests and identify missing coverage."
+  }
+};
 
 export function App() {
   const [active, setActive] = useState("Generate");
   const [generations, setGenerations] = useState<Generation[]>([]);
+  const [testCaseWorkflow, setTestCaseWorkflow] = useState<TestCaseWorkflow>("Generate New");
   const [health, setHealth] = useState<{ aiConfigured: boolean; visionConfigured?: boolean; visionEnabled?: boolean; ocrFallbackEnabled?: boolean; model?: string } | null>(null);
   const [message, setMessage] = useState("");
   const [requirement, setRequirement] = useState<RequirementInput>(emptyRequirement);
@@ -298,7 +315,7 @@ export function App() {
   }
 
   return (
-    <Shell active={active} setActive={setActive} health={health}>
+    <Shell active={active} setActive={setActive} health={health} titleOverride={active === "Generate" ? workflowCopy[testCaseWorkflow].title : undefined} subtitleOverride={active === "Generate" ? workflowCopy[testCaseWorkflow].subtitle : undefined}>
       {message && <div className="toast" role="status">{message}</div>}
       <section className={`page ${["Review Test Cases", "Coverage", "Export History"].includes(active) ? "page-wide" : ""}`}>
         {error && <Notice type="error" text={error} />}
@@ -308,6 +325,8 @@ export function App() {
         {active === "Generate" && (
           <GenerateTab
             key={workspaceVersion}
+            workMode={testCaseWorkflow}
+            setWorkMode={setTestCaseWorkflow}
             requirement={requirement}
             setRequirement={setRequirement}
             requirementFiles={requirementFiles}
@@ -390,6 +409,8 @@ function DashboardTab({ generations, generation, coverage, health, setActive }: 
 }
 
 function GenerateTab(props: {
+  workMode: TestCaseWorkflow;
+  setWorkMode: (mode: TestCaseWorkflow) => void;
   requirement: RequirementInput;
   setRequirement: (r: RequirementInput) => void;
   requirementFiles: ReqFile[];
@@ -415,10 +436,10 @@ function GenerateTab(props: {
   busy: string;
   progress: string[];
 }) {
-  const { requirement, setRequirement, requirementFiles, setRequirementFiles, uploadRequirementFiles, screenshots, setScreenshots, uploadScreenshots, analyseUploadedScreenshots, detectedElements, setDetectedElements, visionSummary, reports, ignoreScreenshotData, setIgnoreScreenshotData, config, setConfig, generate, refineExistingExcel, reviewExistingCoverage, coverageReview, resetWorkspace, busy, progress } = props;
-  const [workMode, setWorkMode] = useState<"Generate New" | "Refine Existing" | "Review Coverage">("Generate New");
+  const { workMode, setWorkMode, requirement, setRequirement, requirementFiles, setRequirementFiles, uploadRequirementFiles, screenshots, setScreenshots, uploadScreenshots, analyseUploadedScreenshots, detectedElements, setDetectedElements, visionSummary, reports, ignoreScreenshotData, setIgnoreScreenshotData, config, setConfig, generate, refineExistingExcel, reviewExistingCoverage, coverageReview, resetWorkspace, busy, progress } = props;
   const [sourceMode, setSourceMode] = useState<"Manual Entry" | "Upload Requirement">("Manual Entry");
-  const [existingCaseFile, setExistingCaseFile] = useState<File | null>(null);
+  const [refineCaseFile, setRefineCaseFile] = useState<File | null>(null);
+  const [coverageCaseFile, setCoverageCaseFile] = useState<File | null>(null);
   const update = (key: keyof RequirementInput, value: string) => setRequirement({ ...requirement, [key]: value });
   const canGenerate = Boolean(requirement.acceptanceCriteria.trim());
   const setCount = (value: string) => setConfig({ ...config, maxCases: value === "Auto" ? 250 : Number(value) });
@@ -435,9 +456,32 @@ function GenerateTab(props: {
     { label: "Comprehensive", value: "Detailed", detail: "All standard + security, integration, accessibility and more" }
   ] as const;
   const standardIncluded = ["Positive", "Negative", "Validation", "Edge Cases", "State Transition", "Permission", "Integration", "UI", "Responsive"];
+  const resetActiveWorkflow = () => {
+    if (workMode === "Generate New") {
+      resetWorkspace();
+      return;
+    }
+    if (workMode === "Review & Refine") {
+      setRefineCaseFile(null);
+      return;
+    }
+    setCoverageCaseFile(null);
+    setRequirement({ ...requirement, acceptanceCriteria: "" });
+  };
 
   return (
     <article className={workMode === "Generate New" ? "generate-workspace" : "primary-card"}>
+      <div className="workflow-switcher-row">
+        <div className="segmented workflow-switcher" role="radiogroup" aria-label="Test case workflow">
+          {(["Generate New", "Review & Refine", "Review Coverage"] as const).map((mode) => (
+            <button key={mode} className={workMode === mode ? "active" : ""} onClick={() => setWorkMode(mode)} role="radio" aria-checked={workMode === mode}>
+              {mode}
+            </button>
+          ))}
+        </div>
+        <button className="text-button" onClick={resetActiveWorkflow}><RefreshCw size={16} />Reset {workMode}</button>
+      </div>
+
       {workMode === "Generate New" && (
         <div className="generate-layout">
           <div className="generate-main">
@@ -633,15 +677,6 @@ function GenerateTab(props: {
         </div>
       )}
 
-      {workMode !== "Generate New" && (
-        <div className="compact-workflow-strip">
-          <div className="segmented">
-            {(["Generate New", "Refine Existing", "Review Coverage"] as const).map((mode) => <button key={mode} className={workMode === mode ? "active" : ""} onClick={() => setWorkMode(mode)}>{mode}</button>)}
-          </div>
-          <button onClick={resetWorkspace}><RefreshCw size={16} />Reset Page</button>
-        </div>
-      )}
-
       {workMode === "Review Coverage" && <section className="form-section">
         <div className="source-row">
           <h2>Acceptance Criteria</h2>
@@ -649,18 +684,29 @@ function GenerateTab(props: {
         <Field label="Acceptance Criteria"><textarea className="hero-textarea" value={requirement.acceptanceCriteria} onChange={(e) => update("acceptanceCriteria", e.target.value)} placeholder="Paste acceptance criteria to compare against the uploaded existing test cases..." /></Field>
       </section>}
 
-      {workMode === "Refine Existing" && (
+      {workMode === "Review & Refine" && (
         <section className="review-shell">
           <div className="review-intro">
-            <h2>Refine Existing Test Cases</h2>
-            <p className="muted">Upload an Excel workbook and TestCraft will clean titles, steps, expected results, prefixes, numbering, and Azure import structure.</p>
+            <h2>1. Upload Existing Test Cases</h2>
+            <p className="muted">Upload an Excel workbook and TestCraft will analyse quality, preserve valid data, and prepare refined Azure-ready output.</p>
+          </div>
+          <div className="generate-stepper compact-workflow-stepper">
+            {["Upload Existing Test Cases", "Analyse Quality", "Review Suggested Improvements", "Export Refined Workbook"].map((step, index) => (
+              <div className="step-item" key={step}><span>{index + 1}</span><div><strong>{step}</strong></div></div>
+            ))}
           </div>
           <label className="file-strip enterprise-upload">
             <UploadCloud size={18} />
-            <span>{existingCaseFile ? existingCaseFile.name : "Upload existing test case Excel"}</span>
+            <span>{refineCaseFile ? refineCaseFile.name : "Upload existing test case Excel"}</span>
             <small>XLSX, XLS</small>
-            <input type="file" accept=".xlsx,.xls" onChange={(e) => setExistingCaseFile(e.target.files?.[0] ?? null)} />
+            <input type="file" accept=".xlsx,.xls" onChange={(e) => setRefineCaseFile(e.target.files?.[0] ?? null)} />
           </label>
+          <section className="workflow-summary-panel">
+            <h2>Analysis Summary</h2>
+            <div className="summary-chips">
+              {["Test cases detected", "Duplicate titles", "Generic titles", "Missing expected results", "Misaligned columns", "Non-sequential steps", "Generic placeholders", "Missing AC mappings", "Suggested improvements"].map((item) => <Chip key={item} label={item} value="--" />)}
+            </div>
+          </section>
         </section>
       )}
 
@@ -670,11 +716,16 @@ function GenerateTab(props: {
             <h2>Review Existing Coverage</h2>
             <p className="muted">Upload existing test cases and compare them against the acceptance criteria. Missing coverage is suggested in the same clean Azure-ready format.</p>
           </div>
+          <div className="generate-stepper compact-workflow-stepper">
+            {["Add Acceptance Criteria", "Upload Existing Tests", "Analyse Coverage", "Review Gaps", "Generate Missing Tests"].map((step, index) => (
+              <div className="step-item" key={step}><span>{index + 1}</span><div><strong>{step}</strong></div></div>
+            ))}
+          </div>
           <label className="file-strip enterprise-upload">
             <UploadCloud size={18} />
-            <span>{existingCaseFile ? existingCaseFile.name : "Upload existing test case Excel"}</span>
+            <span>{coverageCaseFile ? coverageCaseFile.name : "Upload existing test case Excel"}</span>
             <small>XLSX, XLS</small>
-            <input type="file" accept=".xlsx,.xls" onChange={(e) => setExistingCaseFile(e.target.files?.[0] ?? null)} />
+            <input type="file" accept=".xlsx,.xls" onChange={(e) => setCoverageCaseFile(e.target.files?.[0] ?? null)} />
           </label>
           {coverageReview && <CoverageReviewPanel review={coverageReview} />}
         </section>
@@ -682,10 +733,10 @@ function GenerateTab(props: {
 
       {busy && workMode !== "Generate New" && <ProgressList items={progress} />}
       <div className="actions">
-        {workMode === "Refine Existing" && <button className="primary big" onClick={() => existingCaseFile && refineExistingExcel(existingCaseFile)} disabled={Boolean(busy) || !existingCaseFile}>
+        {workMode === "Review & Refine" && <button className="primary big" onClick={() => refineCaseFile && refineExistingExcel(refineCaseFile)} disabled={Boolean(busy) || !refineCaseFile}>
           <Check size={18} />{busy === "Refining" ? "Refining Existing Cases..." : "Refine Existing Test Cases"}
         </button>}
-        {workMode === "Review Coverage" && <button className="primary big" onClick={() => existingCaseFile && reviewExistingCoverage(existingCaseFile)} disabled={Boolean(busy) || !existingCaseFile || !canGenerate}>
+        {workMode === "Review Coverage" && <button className="primary big" onClick={() => coverageCaseFile && reviewExistingCoverage(coverageCaseFile)} disabled={Boolean(busy) || !coverageCaseFile || !canGenerate}>
           <Search size={18} />{busy === "Reviewing coverage" ? "Reviewing Coverage..." : "Review Coverage"}
         </button>}
       </div>

@@ -14,7 +14,7 @@ import type { ReactNode } from "react";
 
 const navItems = [
   { label: "Dashboard", value: "Dashboard", icon: LayoutDashboard },
-  { label: "Generate Tests", value: "Generate", icon: FilePenLine },
+  { label: "Test Case Workspace", value: "Generate", icon: FilePenLine },
   { label: "Review Test Cases", value: "Review Test Cases", icon: ClipboardCheck },
   { label: "Coverage", value: "Coverage", icon: BarChart3 },
   { label: "Export History", value: "Export History", icon: Archive },
@@ -60,11 +60,15 @@ export function Shell({
   active,
   setActive,
   health,
+  titleOverride,
+  subtitleOverride,
   children
 }: {
   active: string;
   setActive: (tab: string) => void;
   health?: ShellHealth;
+  titleOverride?: string;
+  subtitleOverride?: string;
   children: ReactNode;
 }) {
   const copy = pageCopy[active] ?? pageCopy.Generate;
@@ -113,8 +117,8 @@ export function Shell({
       <div className="app-main">
         <header className="workspace-header">
           <div>
-            <h1>{copy.title}</h1>
-            <p>{copy.subtitle}</p>
+            <h1>{titleOverride ?? copy.title}</h1>
+            <p>{subtitleOverride ?? copy.subtitle}</p>
           </div>
           <div className="workspace-actions">
             <button className="workspace-pill" type="button">
