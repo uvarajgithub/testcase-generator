@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { generateCases, inferElementsFromRequirement, parseAcceptanceCriteria } from "../src/lib/analysis";
 import type { Generation } from "../src/lib/schemas";
 import { buildFilename, buildRefinedWorkbook, buildWorkbook } from "../server/lib/excel";
+import { reviewExistingCoverage } from "../server/lib/coverageReview";
+import { validateAzureTestCases } from "../src/lib/format";
 
 function sampleGeneration(): Generation {
   const requirement = {
@@ -149,5 +151,29 @@ describe("Excel workbook", () => {
     expect(adoSheet.getCell("D2").value).toBe("");
     expect(adoSheet.getCell("D3").value).toBe(1);
     expect(adoSheet.columnCount).toBe(9);
+  });
+
+  it("reviews existing test-case coverage and suggests missing Azure-ready cases", async () => {
+    const source = new ExcelJS.Workbook();
+    const sheet = source.addWorksheet("Sheet2");
+    sheet.columns = [
+      { header: "ID", key: "id" },
+      { header: "Work Item Type", key: "workItemType" },
+      { header: "Title", key: "title" },
+      { header: "Test Step", key: "testStep" },
+      { header: "Step Action", key: "stepAction" },
+      { header: "Step Expected", key: "stepExpected" }
+    ];
+    sheet.addRow({ workItemType: "Test Case", title: "Verify user can pay invoice with valid card details" });
+    sheet.addRow({ testStep: 1, stepAction: "Open the Pay invoice page.", stepExpected: "The Pay invoice page opens successfully." });
+    sheet.addRow({ testStep: 2, stepAction: "Enter valid card details in the payment fields.", stepExpected: "The entered card values are displayed without validation errors." });
+    sheet.addRow({ testStep: 3, stepAction: "Click the submit payment button.", stepExpected: "The invoice payment request is submitted." });
+    const result = await reviewExistingCoverage(await source.xlsx.writeBuffer(), sampleGeneration().requirement, "existing.xlsx");
+
+    expect(result.summary.existingTestCases).toBe(1);
+    expect(result.summary.missing).toBeGreaterThan(0);
+    expect(result.items.some((item) => item.status === "Missing")).toBe(true);
+    expect(result.suggestedTestCases.length).toBeGreaterThan(0);
+    expect(validateAzureTestCases(result.suggestedTestCases)).toEqual([]);
   });
 });

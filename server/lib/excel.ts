@@ -81,7 +81,7 @@ function toWorkbookBuffer(input: ArrayBuffer | Uint8Array): ExcelJS.Buffer {
   return input;
 }
 
-type UploadedCase = {
+export type UploadedCase = {
   title: string;
   steps: string[];
   expectedResults: string[];
@@ -89,7 +89,7 @@ type UploadedCase = {
   priority?: TestCase["priority"];
 };
 
-function parseUploadedTestCases(workbook: ExcelJS.Workbook): UploadedCase[] {
+export function parseUploadedTestCases(workbook: ExcelJS.Workbook): UploadedCase[] {
   const sheet = workbook.getWorksheet("Sheet2") ?? workbook.worksheets[0];
   if (!sheet) return [];
   const headerRow = sheet.getRow(1);
@@ -135,7 +135,7 @@ function parseUploadedTestCases(workbook: ExcelJS.Workbook): UploadedCase[] {
   return cases.filter((item) => item.title || item.steps.length);
 }
 
-function refinedGeneration(uploadedCases: UploadedCase[], originalName: string): Generation {
+export function refinedGeneration(uploadedCases: UploadedCase[], originalName: string): Generation {
   const now = new Date().toISOString();
   const usedTitles = new Set<string>();
   const testCases = uploadedCases.map((item, index) => refineUploadedCase(item, index, usedTitles));

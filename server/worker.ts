@@ -4,6 +4,7 @@ import { buildFilename, buildRefinedWorkbook, buildWorkbook, type AzureExportCon
 import { buildHtmlFilename, buildHtmlReport } from "./lib/html";
 import { STATIC_ASSETS } from "./generated-assets";
 import { analyseScreenshots, publicVisionStatus } from "./lib/vision";
+import { reviewExistingCoverage } from "./lib/coverageReview";
 
 type Env = Record<string, unknown>;
 type ApiFailure = { ok: false; error: { code: string; message: string; details?: unknown } };
@@ -70,6 +71,16 @@ export default {
             "content-disposition": `attachment; filename="${result.filename}"`
           }
         });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/review-existing-coverage") {
+        const form = await request.formData();
+        const file = form.get("workbook");
+        if (!(file instanceof File)) return json(fail("UPLOAD_VALIDATION", "Upload an existing test-case Excel file."), 400);
+        if (!/\.(xlsx|xls)$/i.test(file.name)) return json(fail("UPLOAD_VALIDATION", "Upload an Excel workbook as .xlsx or .xls."), 400);
+        const requirement = requirementSchema.parse(JSON.parse(String(form.get("requirement") ?? "{}")));
+        const review = await reviewExistingCoverage(await file.arrayBuffer(), requirement, file.name);
+        return json({ ok: true, data: { review } });
       }
 
       if (request.method === "POST" && url.pathname === "/api/analyze") {

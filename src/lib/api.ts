@@ -1,4 +1,4 @@
-import type { AcceptanceCriterion, CoverageSummary, DetectedElement, Generation, GenerationConfig, RequirementInput } from "./schemas";
+import type { AcceptanceCriterion, CoverageSummary, DetectedElement, Generation, GenerationConfig, RequirementInput, TestCase } from "./schemas";
 
 type ApiResponse<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string } };
 export type VisionSummary = {
@@ -36,6 +36,33 @@ export type ScreenshotAnalysisReport = {
   detectedDependencies: string[];
   warnings: string[];
   findings: Array<{ value: string; source: string; mode: string; confidence: number; usedInCoverage: boolean }>;
+};
+
+export type CoverageReviewResult = {
+  summary: {
+    totalAcceptanceCriteria: number;
+    existingTestCases: number;
+    covered: number;
+    partial: number;
+    missing: number;
+    coveragePercent: number;
+    duplicateCount: number;
+    weakCaseCount: number;
+    suggestedMissingCases: number;
+  };
+  items: Array<{
+    acId: string;
+    acceptanceCriterion: string;
+    status: "Covered" | "Partial" | "Missing";
+    score: number;
+    matchedTestCases: string[];
+    evidence: string;
+    recommendation: string;
+  }>;
+  duplicateTitles: string[];
+  weakCases: Array<{ title: string; issue: string }>;
+  suggestedTestCases: TestCase[];
+  warnings: string[];
 };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -110,6 +137,12 @@ export const api = {
     link.click();
     URL.revokeObjectURL(link.href);
     return filename;
+  },
+  reviewExistingCoverage: (requirement: RequirementInput, file: File) => {
+    const form = new FormData();
+    form.append("requirement", JSON.stringify(requirement));
+    form.append("workbook", file);
+    return request<{ review: CoverageReviewResult }>("/api/review-existing-coverage", { method: "POST", body: form });
   },
   openHtml: async (generationId: string) => {
     const response = await fetch(`/api/generations/${generationId}/html`, { method: "POST" });

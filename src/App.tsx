@@ -2,7 +2,7 @@ import { AlertCircle, Check, Copy, Edit3, ExternalLink, FileSpreadsheet, Filter,
 import { useEffect, useRef, useState } from "react";
 import { Shell } from "./components/Shell";
 import { Field } from "./components/Field";
-import { api, type ScreenshotAnalysisReport, type VisionSummary } from "./lib/api";
+import { api, type CoverageReviewResult, type ScreenshotAnalysisReport, type VisionSummary } from "./lib/api";
 import { calculateCoverage, inferRequirementModel, isDocumentHeading, normalizeRequirementText } from "./lib/analysis";
 import { azureCaseRows, validateAzureTestCases } from "./lib/format";
 import { generationConfigSchema, priorities, testTypes, type CoverageSummary, type Generation, type GenerationConfig, type RequirementInput, type TestCase } from "./lib/schemas";
@@ -57,6 +57,7 @@ export function App() {
   const [visionSummary, setVisionSummary] = useState<VisionSummary | null>(null);
   const [screenshotReports, setScreenshotReports] = useState<ScreenshotAnalysisReport[]>([]);
   const [ignoreScreenshotData, setIgnoreScreenshotData] = useState(false);
+  const [coverageReview, setCoverageReview] = useState<CoverageReviewResult | null>(null);
   const generatingRef = useRef(false);
 
   useEffect(() => {
@@ -198,6 +199,27 @@ export function App() {
     }
   }
 
+  async function reviewExistingCoverage(file: File) {
+    if (generatingRef.current || !requirement.acceptanceCriteria.trim()) return;
+    generatingRef.current = true;
+    setBusy("Reviewing coverage");
+    setError("");
+    setCoverageReview(null);
+    setProgress(["Reading uploaded test-case workbook", "Comparing existing tests with acceptance criteria", "Preparing missing coverage suggestions"]);
+    try {
+      const prepared = withDefaults(requirement, requirementFiles);
+      setRequirement(prepared);
+      const data = await api.reviewExistingCoverage(prepared, file);
+      setCoverageReview(data.review);
+      setMessage(`Coverage review complete: ${data.review.summary.coveragePercent}% covered.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Coverage review failed. Upload acceptance criteria and an existing test-case Excel file.");
+    } finally {
+      generatingRef.current = false;
+      setBusy("");
+    }
+  }
+
   async function saveGeneration(next: Generation, toast = "Draft saved.") {
     const data = await api.updateGeneration(next);
     setGeneration(data.generation);
@@ -273,6 +295,8 @@ export function App() {
             setConfig={setConfig}
             generate={generate}
             refineExistingExcel={refineExistingExcel}
+            reviewExistingCoverage={reviewExistingCoverage}
+            coverageReview={coverageReview}
             busy={busy}
             progress={progress}
           />
@@ -310,10 +334,13 @@ function GenerateTab(props: {
   setConfig: (c: GenerationConfig) => void;
   generate: () => void;
   refineExistingExcel: (file: File) => void;
+  reviewExistingCoverage: (file: File) => void;
+  coverageReview: CoverageReviewResult | null;
   busy: string;
   progress: string[];
 }) {
-  const { requirement, setRequirement, requirementFiles, setRequirementFiles, uploadRequirementFiles, screenshots, setScreenshots, uploadScreenshots, analyseUploadedScreenshots, detectedElements, setDetectedElements, visionSummary, reports, ignoreScreenshotData, setIgnoreScreenshotData, config, setConfig, generate, refineExistingExcel, busy, progress } = props;
+  const { requirement, setRequirement, requirementFiles, setRequirementFiles, uploadRequirementFiles, screenshots, setScreenshots, uploadScreenshots, analyseUploadedScreenshots, detectedElements, setDetectedElements, visionSummary, reports, ignoreScreenshotData, setIgnoreScreenshotData, config, setConfig, generate, refineExistingExcel, reviewExistingCoverage, coverageReview, busy, progress } = props;
+  const [workMode, setWorkMode] = useState<"Generate New" | "Refine Existing" | "Review Coverage">("Generate New");
   const [sourceMode, setSourceMode] = useState<"Manual Entry" | "Upload Requirement">("Manual Entry");
   const [existingCaseFile, setExistingCaseFile] = useState<File | null>(null);
   const update = (key: keyof RequirementInput, value: string) => setRequirement({ ...requirement, [key]: value });
@@ -324,12 +351,25 @@ function GenerateTab(props: {
     <article className="primary-card">
       <div className="card-heading">
         <div>
-          <h1>Generate Test Cases</h1>
-          <p>Enter acceptance criteria and configure how your test cases should be generated.</p>
+          <h1>Test Case Workspace</h1>
+          <p>Select a workflow, then provide only the inputs required for that action.</p>
         </div>
       </div>
 
-      <section className="form-section">
+      <section className="mode-selector" role="radiogroup" aria-label="Test case workflow">
+        {([
+          { name: "Generate New", detail: "Acceptance criteria with optional screenshots" },
+          { name: "Refine Existing", detail: "Clean an uploaded test-case workbook" },
+          { name: "Review Coverage", detail: "Compare acceptance criteria with existing tests" }
+        ] as const).map((mode) => (
+          <button key={mode.name} className={workMode === mode.name ? "mode-card active" : "mode-card"} onClick={() => setWorkMode(mode.name)} role="radio" aria-checked={workMode === mode.name}>
+            <strong>{mode.name}</strong>
+            <span>{mode.detail}</span>
+          </button>
+        ))}
+      </section>
+
+      {workMode !== "Refine Existing" && <section className="form-section">
         <div className="source-row">
           <h2>Requirement Source</h2>
           <div className="segmented">
@@ -367,9 +407,9 @@ function GenerateTab(props: {
             <Field label="Additional Notes"><textarea value={requirement.additionalNotes} onChange={(e) => update("additionalNotes", e.target.value)} /></Field>
           </div>
         </details>
-      </section>
+      </section>}
 
-      <section className="form-section compact-upload-section">
+      {workMode === "Generate New" && <section className="form-section compact-upload-section">
         <div className="compact-title">
           <h2>Interface Screenshots</h2>
           <span className="badge">Optional</span>
@@ -407,9 +447,9 @@ function GenerateTab(props: {
             setIgnore={setIgnoreScreenshotData}
           />
         )}
-      </section>
+      </section>}
 
-      <section className="form-section generation-row">
+      {workMode === "Generate New" && <section className="form-section generation-row">
         <div className="control-panel test-types-panel">
           <h2>Test Types</h2>
           <div className="option-grid compact">
@@ -433,24 +473,111 @@ function GenerateTab(props: {
             <label><input type="checkbox" defaultChecked />Group by AC</label>
           </div>
         </div>
-      </section>
+      </section>}
+
+      {workMode === "Refine Existing" && (
+        <section className="review-shell">
+          <div className="review-intro">
+            <h2>Refine Existing Test Cases</h2>
+            <p className="muted">Upload an Excel workbook and TestCraft will clean titles, steps, expected results, prefixes, numbering, and Azure import structure.</p>
+          </div>
+          <label className="file-strip enterprise-upload">
+            <UploadCloud size={18} />
+            <span>{existingCaseFile ? existingCaseFile.name : "Upload existing test case Excel"}</span>
+            <small>XLSX, XLS</small>
+            <input type="file" accept=".xlsx,.xls" onChange={(e) => setExistingCaseFile(e.target.files?.[0] ?? null)} />
+          </label>
+        </section>
+      )}
+
+      {workMode === "Review Coverage" && (
+        <section className="review-shell">
+          <div className="review-intro">
+            <h2>Review Existing Coverage</h2>
+            <p className="muted">Upload existing test cases and compare them against the acceptance criteria. Missing coverage is suggested in the same clean Azure-ready format.</p>
+          </div>
+          <label className="file-strip enterprise-upload">
+            <UploadCloud size={18} />
+            <span>{existingCaseFile ? existingCaseFile.name : "Upload existing test case Excel"}</span>
+            <small>XLSX, XLS</small>
+            <input type="file" accept=".xlsx,.xls" onChange={(e) => setExistingCaseFile(e.target.files?.[0] ?? null)} />
+          </label>
+          {coverageReview && <CoverageReviewPanel review={coverageReview} />}
+        </section>
+      )}
 
       {busy && <ProgressList items={progress} />}
       <div className="actions">
-        <label className="file-strip refine-upload">
-          <UploadCloud size={18} />
-          <span>{existingCaseFile ? existingCaseFile.name : "Upload existing test case Excel"}</span>
-          <small>XLSX, XLS</small>
-          <input type="file" accept=".xlsx,.xls" onChange={(e) => setExistingCaseFile(e.target.files?.[0] ?? null)} />
-        </label>
-        <button onClick={() => existingCaseFile && refineExistingExcel(existingCaseFile)} disabled={Boolean(busy) || !existingCaseFile}>
+        {workMode === "Refine Existing" && <button className="primary big" onClick={() => existingCaseFile && refineExistingExcel(existingCaseFile)} disabled={Boolean(busy) || !existingCaseFile}>
           <Check size={18} />{busy === "Refining" ? "Refining Existing Cases..." : "Refine Existing Test Cases"}
-        </button>
-        <button className="primary big generate-button" onClick={generate} disabled={!canGenerate || Boolean(busy)}>
-          <RefreshCw size={18} />{busy ? "Generating Test Cases…" : "Generate Test Cases"}
-        </button>
+        </button>}
+        {workMode === "Review Coverage" && <button className="primary big" onClick={() => existingCaseFile && reviewExistingCoverage(existingCaseFile)} disabled={Boolean(busy) || !existingCaseFile || !canGenerate}>
+          <Search size={18} />{busy === "Reviewing coverage" ? "Reviewing Coverage..." : "Review Coverage"}
+        </button>}
+        {workMode === "Generate New" && <button className="primary big generate-button" onClick={generate} disabled={!canGenerate || Boolean(busy)}>
+          <RefreshCw size={18} />{busy ? "Generating Test Cases..." : "Generate Test Cases"}
+        </button>}
       </div>
     </article>
+  );
+}
+
+function CoverageReviewPanel({ review }: { review: CoverageReviewResult }) {
+  return (
+    <div className="coverage-review">
+      <div className="metrics compact-metrics">
+        <Metric label="Coverage" value={`${review.summary.coveragePercent}%`} />
+        <Metric label="Acceptance Criteria" value={review.summary.totalAcceptanceCriteria} />
+        <Metric label="Existing Cases" value={review.summary.existingTestCases} />
+        <Metric label="Missing" value={review.summary.missing} />
+        <Metric label="Partial" value={review.summary.partial} />
+        <Metric label="Suggested Cases" value={review.summary.suggestedMissingCases} />
+      </div>
+      {review.warnings.map((warning) => <Notice key={warning} type="info" text={warning} />)}
+      <div className="review-grid">
+        <div className="review-list">
+          <h2>Acceptance Criteria Coverage</h2>
+          {review.items.map((item) => (
+            <article className={`coverage-item ${item.status.toLowerCase()}`} key={item.acId}>
+              <div className="coverage-line">
+                <strong>{item.acId}</strong>
+                <span>{item.status}</span>
+                <small>{item.score}% match</small>
+              </div>
+              <p>{item.acceptanceCriterion}</p>
+              <small>{item.evidence}</small>
+              <TraceList title="Matched test cases" items={item.matchedTestCases.length ? item.matchedTestCases : ["None"]} />
+              <p className="muted">{item.recommendation}</p>
+            </article>
+          ))}
+        </div>
+        <div className="review-list">
+          <h2>Quality Signals</h2>
+          <TraceList title="Duplicate titles" items={review.duplicateTitles.length ? review.duplicateTitles : ["No duplicate titles found"]} />
+          <TraceList title="Weak existing cases" items={review.weakCases.length ? review.weakCases.map((item) => `${item.title}: ${item.issue}`) : ["No weak cases found"]} />
+        </div>
+      </div>
+      <div className="review-list">
+        <h2>Suggested Missing Test Cases</h2>
+        {review.suggestedTestCases.length ? (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>ID</th><th>Work Item Type</th><th>Title</th><th>Test Step</th><th>Step Action</th><th>Step Expected</th></tr></thead>
+              <tbody>{review.suggestedTestCases.flatMap((tc) => azureCaseRows(tc).map((row, index) => (
+                <tr key={`${tc.id}-${index}`} className={index === 0 ? "metadata-row" : "step-row"}>
+                  <td>{row.id}</td>
+                  <td>{row.workItemType}</td>
+                  <td>{row.title}</td>
+                  <td>{row.testStep}</td>
+                  <td>{row.stepAction}</td>
+                  <td>{row.stepExpected}</td>
+                </tr>
+              )))}</tbody>
+            </table>
+          </div>
+        ) : <Empty text="No missing test cases are suggested because the uploaded workbook covers the acceptance criteria." />}
+      </div>
+    </div>
   );
 }
 

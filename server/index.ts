@@ -9,6 +9,7 @@ import { readDb, upsertGeneration, writeDb } from "./lib/store";
 import { buildFilename, buildRefinedWorkbook, buildWorkbook, type AzureExportConfig } from "./lib/excel";
 import { buildHtmlFilename, buildHtmlReport } from "./lib/html";
 import { analyseScreenshots, publicVisionStatus } from "./lib/vision";
+import { reviewExistingCoverage } from "./lib/coverageReview";
 
 const port = Number(process.env.PORT ?? 8787);
 const uploadDir = join(process.cwd(), "server", "data", "uploads");
@@ -122,6 +123,25 @@ const server = createServer(async (req, res) => {
         } catch (error) {
           await unlink(file.path).catch(() => undefined);
           return sendJson(res, 400, fail("REFINE_FAILED", error instanceof Error ? error.message : "Existing test-case refinement failed."));
+        }
+      });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/review-existing-coverage") {
+      return workbookUpload.single("workbook")(req as never, res as never, async (err: unknown) => {
+        if (err) return sendJson(res, 400, fail("UPLOAD_VALIDATION", (err as MulterError).message));
+        const file = (req as unknown as { file?: { originalname: string; path: string }; body?: Record<string, string> }).file;
+        const body = (req as unknown as { body?: Record<string, string> }).body ?? {};
+        if (!file) return sendJson(res, 400, fail("UPLOAD_VALIDATION", "Upload an existing test-case Excel file."));
+        try {
+          const requirement = requirementSchema.parse(JSON.parse(body.requirement || "{}"));
+          const source = await readFile(file.path);
+          const review = await reviewExistingCoverage(source, requirement, file.originalname);
+          await unlink(file.path).catch(() => undefined);
+          return sendJson(res, 200, { ok: true, data: { review } });
+        } catch (error) {
+          await unlink(file.path).catch(() => undefined);
+          return sendJson(res, 400, fail("REVIEW_FAILED", error instanceof Error ? error.message : "Coverage review failed."));
         }
       });
     }
