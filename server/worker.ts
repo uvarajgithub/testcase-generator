@@ -174,7 +174,13 @@ async function serveAsset(request: Request) {
   const path = url.pathname === "/" ? "/index.html" : url.pathname;
   const asset = STATIC_ASSETS[path] ?? (!path.includes(".") ? STATIC_ASSETS["/index.html"] : undefined);
   if (!asset) return new Response("Not found", { status: 404 });
-  return new Response(asset.content, { headers: { "content-type": asset.contentType } });
+  const isAppShell = path === "/index.html" || !path.includes(".");
+  return new Response(asset.content, {
+    headers: {
+      "content-type": asset.contentType,
+      "cache-control": isAppShell ? "no-store, no-cache, must-revalidate" : "public, max-age=31536000, immutable"
+    }
+  });
 }
 
 function upsertGeneration(generation: Generation) {
