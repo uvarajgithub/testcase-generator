@@ -124,6 +124,11 @@ export function App() {
       setVisionSummary(null);
       setScreenshotReports([]);
       setIgnoreScreenshotData(false);
+      if (requirement.acceptanceCriteria.trim()) {
+        await analyseUploadedScreenshots(withDefaults(requirement, requirementFiles), selected);
+      } else {
+        setMessage("Screenshot uploaded. Add acceptance criteria to auto-analyse and match visual evidence.");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Screenshot upload failed. Check file type and size.");
     } finally {
@@ -798,6 +803,7 @@ function DetectedElementsReview({ elements, setElements, summary, reports, onAna
               <div className="summary-chips">
                 <span className="summary-chip"><strong>{Math.round(element.confidence * 100)}%</strong>Confidence</span>
                 <span className="summary-chip"><strong>{element.screenshotName}</strong>Source</span>
+                <span className="summary-chip"><strong>{element.relatedAcceptanceCriterionId ?? "Unmatched"}</strong>AC match</span>
               </div>
               <div className="actions"><button onClick={() => setElements(elements.filter((item) => item.id !== element.id))}><Trash2 size={16} />Remove</button></div>
             </article>

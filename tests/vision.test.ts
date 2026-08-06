@@ -67,6 +67,7 @@ describe("Gemini Vision analysis", () => {
     expect(result.detectedElements.map((item) => item.label)).toContain("TNA Supervisor");
     expect(result.detectedElements.map((item) => item.label)).toContain("Save");
     expect(result.detectedElements.map((item) => item.label)).not.toContain("Business Objective");
+    expect(result.detectedElements.find((item) => item.label === "TNA Supervisor")?.relatedAcceptanceCriterionId).toBe("AC-001");
   });
 
   it("falls back when Gemini is missing and does not let screenshot count reduce suite size", async () => {

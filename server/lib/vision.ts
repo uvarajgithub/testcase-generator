@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { inferElementsFromRequirement, parseAcceptanceCriteria } from "../../src/lib/analysis";
-import { detectedElementSchema, requirementSchema, type DetectedElement, type RequirementInput } from "../../src/lib/schemas";
+import { detectedElementSchema, requirementSchema, type AcceptanceCriterion, type DetectedElement, type RequirementInput } from "../../src/lib/schemas";
 
 export type AiProviderConfig = {
   provider: "gemini";
@@ -190,7 +190,7 @@ export async function analyseScreenshots(input: {
 
   const screenshotRefs = input.screenshots.map((shot) => ({ id: shot.id, filename: shot.filename }));
   const fallbackElements = inferElementsFromRequirement(requirement, screenshotRefs);
-  const detectedElements = usedResults.length ? resultsToDetectedElements(usedResults, input.screenshots, requirement) : fallbackElements;
+  const detectedElements = mapElementsToCriteria(usedResults.length ? resultsToDetectedElements(usedResults, input.screenshots, requirement) : fallbackElements, criteria);
   const validatedElements = detectedElements.map((item) => detectedElementSchema.parse(item));
   const duplicateFindingsRemoved = Math.max(0, detectedElements.length - new Set(validatedElements.map((item) => `${item.label.toLowerCase()}:${item.type.toLowerCase()}`)).size);
   assumptions.push(...validatedElements.map((item) => item.assumption).filter(Boolean));
@@ -381,6 +381,32 @@ function resultsToDetectedElements(results: VisionResult[], screenshots: Screens
         assumption: control.confidence < 0.85 ? "Medium-confidence screenshot detection; review before generation." : ""
       }));
   });
+}
+
+function mapElementsToCriteria(elements: DetectedElement[], criteria: AcceptanceCriterion[]) {
+  return elements.map((element) => {
+    if (element.relatedAcceptanceCriterionId) return element;
+    const matched = matchAcceptanceCriterion(`${element.label} ${element.visibleText} ${element.notes}`, criteria);
+    return matched ? { ...element, relatedAcceptanceCriterionId: matched.id } : element;
+  });
+}
+
+function matchAcceptanceCriterion(value: string, criteria: AcceptanceCriterion[]) {
+  const valueTokens = tokenSet(value);
+  let best: { criterion: AcceptanceCriterion; score: number } | undefined;
+  criteria.forEach((criterion) => {
+    const criterionTokens = tokenSet(`${criterion.text} ${criterion.action} ${criterion.inputs.join(" ")} ${criterion.validations.join(" ")} ${criterion.outcomes.join(" ")}`);
+    if (!valueTokens.size || !criterionTokens.size) return;
+    const overlap = Array.from(valueTokens).filter((token) => criterionTokens.has(token)).length;
+    const score = overlap / Math.max(criterionTokens.size, 1);
+    if (!best || score > best.score) best = { criterion, score };
+  });
+  return best && best.score >= 0.12 ? best.criterion : undefined;
+}
+
+function tokenSet(value: string) {
+  const stop = new Set(["the", "and", "for", "with", "from", "that", "this", "when", "then", "given", "user", "page", "field", "button", "screen", "value", "control"]);
+  return new Set(value.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((token) => token.length > 2 && !stop.has(token)));
 }
 
 function resultToReport(result: VisionResult, screenshot: ScreenshotInput, status: ScreenshotAnalysisReport["status"], mode: ScreenshotAnalysisReport["mode"], usedInCoverage: boolean): ScreenshotAnalysisReport {
