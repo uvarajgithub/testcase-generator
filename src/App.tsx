@@ -58,6 +58,7 @@ export function App() {
   const [screenshotReports, setScreenshotReports] = useState<ScreenshotAnalysisReport[]>([]);
   const [ignoreScreenshotData, setIgnoreScreenshotData] = useState(false);
   const [coverageReview, setCoverageReview] = useState<CoverageReviewResult | null>(null);
+  const [workspaceVersion, setWorkspaceVersion] = useState(0);
   const generatingRef = useRef(false);
 
   useEffect(() => {
@@ -68,6 +69,28 @@ export function App() {
   async function refresh() {
     const data = await api.generations().catch(() => ({ generations: [] }));
     setGenerations(data.generations);
+  }
+
+  function resetWorkspace() {
+    generatingRef.current = false;
+    setRequirement(emptyRequirement);
+    setRequirementFiles([]);
+    setScreenshots([]);
+    setConfig(defaultConfig);
+    setGeneration(null);
+    setCoverage(null);
+    setBusy("");
+    setError("");
+    setProgress([]);
+    setDetectedElements([]);
+    setVisionSummary(null);
+    setScreenshotReports([]);
+    setIgnoreScreenshotData(false);
+    setCoverageReview(null);
+    setActive("Generate");
+    setMessage("Page reset.");
+    setWorkspaceVersion((version) => version + 1);
+    window.history.replaceState(null, "", window.location.pathname);
   }
 
   async function uploadRequirementFiles(files: FileList | null) {
@@ -276,6 +299,7 @@ export function App() {
         {error && <Notice type="error" text={error} />}
         {active === "Generate" && (
           <GenerateTab
+            key={workspaceVersion}
             requirement={requirement}
             setRequirement={setRequirement}
             requirementFiles={requirementFiles}
@@ -297,6 +321,7 @@ export function App() {
             refineExistingExcel={refineExistingExcel}
             reviewExistingCoverage={reviewExistingCoverage}
             coverageReview={coverageReview}
+            resetWorkspace={resetWorkspace}
             busy={busy}
             progress={progress}
           />
@@ -336,10 +361,11 @@ function GenerateTab(props: {
   refineExistingExcel: (file: File) => void;
   reviewExistingCoverage: (file: File) => void;
   coverageReview: CoverageReviewResult | null;
+  resetWorkspace: () => void;
   busy: string;
   progress: string[];
 }) {
-  const { requirement, setRequirement, requirementFiles, setRequirementFiles, uploadRequirementFiles, screenshots, setScreenshots, uploadScreenshots, analyseUploadedScreenshots, detectedElements, setDetectedElements, visionSummary, reports, ignoreScreenshotData, setIgnoreScreenshotData, config, setConfig, generate, refineExistingExcel, reviewExistingCoverage, coverageReview, busy, progress } = props;
+  const { requirement, setRequirement, requirementFiles, setRequirementFiles, uploadRequirementFiles, screenshots, setScreenshots, uploadScreenshots, analyseUploadedScreenshots, detectedElements, setDetectedElements, visionSummary, reports, ignoreScreenshotData, setIgnoreScreenshotData, config, setConfig, generate, refineExistingExcel, reviewExistingCoverage, coverageReview, resetWorkspace, busy, progress } = props;
   const [workMode, setWorkMode] = useState<"Generate New" | "Refine Existing" | "Review Coverage">("Generate New");
   const [sourceMode, setSourceMode] = useState<"Manual Entry" | "Upload Requirement">("Manual Entry");
   const [existingCaseFile, setExistingCaseFile] = useState<File | null>(null);
@@ -354,6 +380,7 @@ function GenerateTab(props: {
           <h1>Test Case Workspace</h1>
           <p>Select a workflow, then provide only the inputs required for that action.</p>
         </div>
+        <button onClick={resetWorkspace}><RefreshCw size={16} />Reset page</button>
       </div>
 
       <section className="mode-selector" role="radiogroup" aria-label="Test case workflow">
@@ -369,7 +396,7 @@ function GenerateTab(props: {
         ))}
       </section>
 
-      {workMode !== "Refine Existing" && <section className="form-section">
+      {workMode === "Generate New" && <section className="form-section">
         <div className="source-row">
           <h2>Requirement Source</h2>
           <div className="segmented">
@@ -407,6 +434,13 @@ function GenerateTab(props: {
             <Field label="Additional Notes"><textarea value={requirement.additionalNotes} onChange={(e) => update("additionalNotes", e.target.value)} /></Field>
           </div>
         </details>
+      </section>}
+
+      {workMode === "Review Coverage" && <section className="form-section">
+        <div className="source-row">
+          <h2>Acceptance Criteria</h2>
+        </div>
+        <Field label="Acceptance Criteria"><textarea className="hero-textarea" value={requirement.acceptanceCriteria} onChange={(e) => update("acceptanceCriteria", e.target.value)} placeholder="Paste acceptance criteria to compare against the uploaded existing test cases..." /></Field>
       </section>}
 
       {workMode === "Generate New" && <section className="form-section compact-upload-section">
