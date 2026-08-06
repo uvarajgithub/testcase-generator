@@ -1,44 +1,138 @@
-import { FlaskConical, Settings, X } from "lucide-react";
-import { useState } from "react";
+import {
+  Archive,
+  BarChart3,
+  Bell,
+  ChevronDown,
+  CircleHelp,
+  ClipboardCheck,
+  FilePenLine,
+  FlaskConical,
+  LayoutDashboard,
+  Settings
+} from "lucide-react";
 import type { ReactNode } from "react";
 
-const tabs = ["Generate", "Review Test Cases", "Coverage", "Export History"] as const;
+const navItems = [
+  { label: "Dashboard", value: "Dashboard", icon: LayoutDashboard },
+  { label: "Generate Tests", value: "Generate", icon: FilePenLine },
+  { label: "Review Test Cases", value: "Review Test Cases", icon: ClipboardCheck },
+  { label: "Coverage", value: "Coverage", icon: BarChart3 },
+  { label: "Export History", value: "Export History", icon: Archive },
+  { label: "Settings", value: "Settings", icon: Settings }
+];
 
-export function Shell({ active, setActive, aiConfigured, children }: { active: string; setActive: (tab: string) => void; aiConfigured?: boolean; children: ReactNode }) {
-  const [showGuidance, setShowGuidance] = useState(true);
+const pageCopy: Record<string, { title: string; subtitle: string }> = {
+  Dashboard: {
+    title: "Dashboard",
+    subtitle: "Monitor workspace activity, AI readiness, and recent test generation output."
+  },
+  Generate: {
+    title: "Generate Test Cases",
+    subtitle: "Create high-quality test cases from requirements and screenshots in minutes."
+  },
+  "Review Test Cases": {
+    title: "Review Test Cases",
+    subtitle: "Edit, validate, and prepare generated cases for Azure DevOps export."
+  },
+  Coverage: {
+    title: "Coverage",
+    subtitle: "Trace acceptance criteria, visual evidence, and generated test coverage."
+  },
+  "Export History": {
+    title: "Export History",
+    subtitle: "Track Azure DevOps Excel workbooks created from saved generations."
+  },
+  Settings: {
+    title: "Settings",
+    subtitle: "Review server-side provider settings and application configuration."
+  }
+};
+
+type ShellHealth = {
+  aiConfigured?: boolean;
+  visionConfigured?: boolean;
+  visionEnabled?: boolean;
+  ocrFallbackEnabled?: boolean;
+  model?: string;
+} | null;
+
+export function Shell({
+  active,
+  setActive,
+  health,
+  children
+}: {
+  active: string;
+  setActive: (tab: string) => void;
+  health?: ShellHealth;
+  children: ReactNode;
+}) {
+  const copy = pageCopy[active] ?? pageCopy.Generate;
+  const geminiReady = Boolean(health?.visionConfigured ?? health?.aiConfigured);
+  const ocrReady = health?.ocrFallbackEnabled !== false;
+
   return (
     <div className="app-shell">
-      <header className="top-header">
+      <aside className="app-sidebar" aria-label="Primary navigation">
         <div className="brand-lockup">
-          <div className="logo-mark"><FlaskConical size={19} aria-hidden /></div>
+          <div className="logo-mark"><FlaskConical size={28} aria-hidden /></div>
           <div>
             <strong>TestCraft AI</strong>
             <span>AI Test Case Generator</span>
           </div>
         </div>
-        <div className="header-actions">
-          {aiConfigured === false && <span className="ai-status">AI not configured — Manual mode active.</span>}
-          <button className="icon-button" onClick={() => setActive("Settings")} aria-label="Settings">
-            <Settings size={18} />
-          </button>
-        </div>
-      </header>
-      <div className="tab-shell">
-        <nav className="workflow-tabs" aria-label="Workflow tabs">
-          {tabs.map((tab) => (
-            <button key={tab} className={active === tab ? "active" : ""} onClick={() => setActive(tab)}>
-              {tab}
+
+        <nav className="sidebar-nav">
+          {navItems.map(({ label, value, icon: Icon }) => (
+            <button key={value} className={active === value ? "active" : ""} onClick={() => setActive(value)}>
+              <Icon size={18} aria-hidden />
+              <span>{label}</span>
             </button>
           ))}
         </nav>
-        {showGuidance && (
-          <div className="guidance">
-            <span>Start with acceptance criteria, optionally add screenshots, review generated cases, export to Azure DevOps.</span>
-            <button onClick={() => setShowGuidance(false)} aria-label="Dismiss guidance"><X size={16} /></button>
+
+        <div className="sidebar-spacer" />
+
+        <section className="ai-card" aria-label="AI status">
+          <strong>AI Status</strong>
+          <span><i className={geminiReady ? "status-dot ready" : "status-dot warn"} />Gemini Vision <b>{geminiReady ? "Connected" : "Setup needed"}</b></span>
+          <span><i className={ocrReady ? "status-dot ready" : "status-dot warn"} />OCR Fallback <b>{ocrReady ? "Enabled" : "Disabled"}</b></span>
+          <span><FlaskConical size={14} aria-hidden />Mode <b>Vision-assisted</b></span>
+        </section>
+
+        <button className="user-card" type="button" aria-label="User menu">
+          <span>AA</span>
+          <div>
+            <strong>Elixir-Hropal</strong>
+            <small>Admin</small>
           </div>
-        )}
+          <ChevronDown size={17} aria-hidden />
+        </button>
+      </aside>
+
+      <div className="app-main">
+        <header className="workspace-header">
+          <div>
+            <h1>{copy.title}</h1>
+            <p>{copy.subtitle}</p>
+          </div>
+          <div className="workspace-actions">
+            <button className="workspace-pill" type="button">
+              <span>Workspace</span>
+              <strong>Elixir-Hropal</strong>
+              <ChevronDown size={16} aria-hidden />
+            </button>
+            <div className="connection-pill">
+              <span>Gemini Vision</span>
+              <strong><i className={geminiReady ? "status-dot ready" : "status-dot warn"} />{geminiReady ? "Connected" : "Unavailable"}</strong>
+            </div>
+            <button className="icon-button" aria-label="Help"><CircleHelp size={20} /></button>
+            <button className="icon-button notification-button" aria-label="Notifications"><Bell size={20} /></button>
+            <button className="avatar-button" type="button">AA <ChevronDown size={15} aria-hidden /></button>
+          </div>
+        </header>
+        <main>{children}</main>
       </div>
-      <main>{children}</main>
     </div>
   );
 }

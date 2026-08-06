@@ -1,4 +1,4 @@
-import { AlertCircle, Check, Copy, Edit3, ExternalLink, FileSpreadsheet, Filter, Plus, RefreshCw, Save, Search, Trash2, UploadCloud } from "lucide-react";
+import { AlertCircle, BarChart3, Check, ClipboardCheck, Copy, Edit3, ExternalLink, FilePenLine, FileSpreadsheet, Filter, Plus, RefreshCw, Save, Search, Trash2, UploadCloud } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Shell } from "./components/Shell";
 import { Field } from "./components/Field";
@@ -40,7 +40,7 @@ type AzureConfig = { areaPath: string; assignedTo: string; state: string };
 export function App() {
   const [active, setActive] = useState("Generate");
   const [generations, setGenerations] = useState<Generation[]>([]);
-  const [health, setHealth] = useState<{ aiConfigured: boolean; visionConfigured?: boolean; model?: string } | null>(null);
+  const [health, setHealth] = useState<{ aiConfigured: boolean; visionConfigured?: boolean; visionEnabled?: boolean; ocrFallbackEnabled?: boolean; model?: string } | null>(null);
   const [message, setMessage] = useState("");
   const [requirement, setRequirement] = useState<RequirementInput>(emptyRequirement);
   const [requirementFiles, setRequirementFiles] = useState<ReqFile[]>([]);
@@ -298,10 +298,13 @@ export function App() {
   }
 
   return (
-    <Shell active={active} setActive={setActive} aiConfigured={health?.aiConfigured}>
+    <Shell active={active} setActive={setActive} health={health}>
       {message && <div className="toast" role="status">{message}</div>}
       <section className={`page ${["Review Test Cases", "Coverage", "Export History"].includes(active) ? "page-wide" : ""}`}>
         {error && <Notice type="error" text={error} />}
+        {active === "Dashboard" && (
+          <DashboardTab generations={generations} generation={generation} coverage={coverage} health={health} setActive={setActive} />
+        )}
         {active === "Generate" && (
           <GenerateTab
             key={workspaceVersion}
@@ -344,6 +347,48 @@ export function App() {
   );
 }
 
+function DashboardTab({ generations, generation, coverage, health, setActive }: {
+  generations: Generation[];
+  generation: Generation | null;
+  coverage: CoverageSummary | null;
+  health: { aiConfigured: boolean; visionConfigured?: boolean; visionEnabled?: boolean; ocrFallbackEnabled?: boolean; model?: string } | null;
+  setActive: (tab: string) => void;
+}) {
+  const exports = generations.reduce((count, item) => count + item.exportHistory.length, 0);
+  return (
+    <article className="dashboard-grid">
+      <section className="dashboard-panel">
+        <div className="card-heading">
+          <div>
+            <h2>Workspace Overview</h2>
+            <p>Current generation health and output readiness.</p>
+          </div>
+          <button className="primary" onClick={() => setActive("Generate")}><Plus size={17} />Generate Tests</button>
+        </div>
+        <div className="metrics">
+          <Metric label="Saved generations" value={generations.length} />
+          <Metric label="Current test cases" value={generation?.testCases.length ?? 0} />
+          <Metric label="Coverage" value={coverage ? `${coverage.coveragePercent}%` : "--"} />
+          <Metric label="Excel exports" value={exports} />
+        </div>
+      </section>
+      <section className="dashboard-panel">
+        <div className="card-heading">
+          <div>
+            <h2>AI Readiness</h2>
+            <p>Vision analysis supports the existing acceptance-criteria rules.</p>
+          </div>
+        </div>
+        <div className="status-list">
+          <span><i className={health?.visionConfigured ? "status-dot ready" : "status-dot warn"} />Gemini Vision <strong>{health?.visionConfigured ? "Connected" : "Unavailable"}</strong></span>
+          <span><i className={health?.ocrFallbackEnabled !== false ? "status-dot ready" : "status-dot warn"} />OCR Fallback <strong>{health?.ocrFallbackEnabled !== false ? "Enabled" : "Disabled"}</strong></span>
+          <span><i className="status-dot ready" />Azure Format Rules <strong>Preserved</strong></span>
+        </div>
+      </section>
+    </article>
+  );
+}
+
 function GenerateTab(props: {
   requirement: RequirementInput;
   setRequirement: (r: RequirementInput) => void;
@@ -378,140 +423,192 @@ function GenerateTab(props: {
   const canGenerate = Boolean(requirement.acceptanceCriteria.trim());
   const setCount = (value: string) => setConfig({ ...config, maxCases: value === "Auto" ? 250 : Number(value) });
 
+  const readyText = canGenerate ? "Ready" : "Missing";
+  const screenshotText = screenshots.length ? `${screenshots.length} added` : "Not added";
+  const uniqueBehaviors = visionSummary?.uniqueCoverageBehaviours ?? (detectedElements.length || "--");
+  const estimatedCases = visionSummary?.plannedTestCases ?? (config.maxCases === 250 ? "--" : config.maxCases);
+
   return (
-    <article className="primary-card">
-      <div className="card-heading">
-        <div>
-          <h1>Test Case Workspace</h1>
-          <p>Select a workflow, then provide only the inputs required for that action.</p>
-        </div>
+    <article className={workMode === "Generate New" ? "generate-workspace" : "primary-card"}>
+      <div className="workspace-modebar">
+        <section className="mode-selector" role="radiogroup" aria-label="Test case workflow">
+          {([
+            { name: "Generate New", detail: "Acceptance criteria with optional screenshots" },
+            { name: "Refine Existing", detail: "Clean an uploaded test-case workbook" },
+            { name: "Review Coverage", detail: "Compare acceptance criteria with existing tests" }
+          ] as const).map((mode) => (
+            <button key={mode.name} className={workMode === mode.name ? "mode-card active" : "mode-card"} onClick={() => setWorkMode(mode.name)} role="radio" aria-checked={workMode === mode.name}>
+              <strong>{mode.name}</strong>
+              <span>{mode.detail}</span>
+            </button>
+          ))}
+        </section>
         <button onClick={resetWorkspace}><RefreshCw size={16} />Reset page</button>
       </div>
 
-      <section className="mode-selector" role="radiogroup" aria-label="Test case workflow">
-        {([
-          { name: "Generate New", detail: "Acceptance criteria with optional screenshots" },
-          { name: "Refine Existing", detail: "Clean an uploaded test-case workbook" },
-          { name: "Review Coverage", detail: "Compare acceptance criteria with existing tests" }
-        ] as const).map((mode) => (
-          <button key={mode.name} className={workMode === mode.name ? "mode-card active" : "mode-card"} onClick={() => setWorkMode(mode.name)} role="radio" aria-checked={workMode === mode.name}>
-            <strong>{mode.name}</strong>
-            <span>{mode.detail}</span>
-          </button>
-        ))}
-      </section>
+      {workMode === "Generate New" && (
+        <div className="generate-layout">
+          <div className="generate-main">
+            <section className="generate-stepper" aria-label="Generation steps">
+              {[
+                ["1", "Requirements", "Add your requirement details"],
+                ["2", "Screenshots", "Add interface screenshots"],
+                ["3", "Coverage", "Choose coverage options"]
+              ].map(([number, title, detail]) => (
+                <div className="step-item" key={number}>
+                  <span>{number}</span>
+                  <div><strong>{title}</strong><small>{detail}</small></div>
+                </div>
+              ))}
+            </section>
 
-      {workMode === "Generate New" && <section className="form-section">
-        <div className="source-row">
-          <h2>Requirement Source</h2>
-          <div className="segmented">
-            {(["Manual Entry", "Upload Requirement"] as const).map((item) => <button key={item} className={sourceMode === item ? "active" : ""} onClick={() => setSourceMode(item)}>{item}</button>)}
+            <section className="workspace-card">
+              <div className="source-row">
+                <div className="numbered-title">
+                  <span>1</span>
+                  <div><h2>Add Requirements</h2><p className="muted">Paste acceptance criteria, user story, or functional requirements.</p></div>
+                </div>
+                <div className="segmented">
+                  {(["Manual Entry", "Upload Requirement"] as const).map((item) => <button key={item} className={sourceMode === item ? "active" : ""} onClick={() => setSourceMode(item)}>{item === "Manual Entry" ? "Paste Text" : "Upload Document"}</button>)}
+                </div>
+              </div>
+              {sourceMode === "Upload Requirement" && (
+                <label className="file-strip">
+                  <UploadCloud size={18} />
+                  <span>Upload requirement</span>
+                  <small>TXT, DOCX, PDF</small>
+                  <input type="file" accept=".txt,.docx,.pdf" multiple onChange={(e) => void uploadRequirementFiles(e.target.files)} />
+                </label>
+              )}
+              {requirementFiles.length > 0 && <FileList files={requirementFiles} remove={(name) => setRequirementFiles(requirementFiles.filter((file) => file.name !== name))} />}
+              <Field label="Acceptance Criteria"><textarea className="hero-textarea" value={requirement.acceptanceCriteria} onChange={(e) => update("acceptanceCriteria", e.target.value)} placeholder="Paste acceptance criteria, user story, Given/When/Then scenarios, business rules, or functional requirements..." /></Field>
+              <details className="requirement-details">
+                <summary>+ Additional context</summary>
+                <div className="grid three">
+                  <Field label="Project Name"><input value={requirement.projectName} onChange={(e) => update("projectName", e.target.value)} placeholder="Optional" /></Field>
+                  <Field label="Module/Feature Name"><input value={requirement.featureName} onChange={(e) => update("featureName", e.target.value)} placeholder="Optional" /></Field>
+                  <Field label="Requirement ID"><input value={requirement.requirementId} onChange={(e) => update("requirementId", e.target.value)} placeholder="Optional" /></Field>
+                </div>
+                <div className="grid three">
+                  <Field label="User Role"><input value={requirement.userRole} onChange={(e) => update("userRole", e.target.value)} /></Field>
+                  <Field label="Platform"><select value={requirement.platform} onChange={(e) => update("platform", e.target.value)}>{["Web", "Mobile", "Desktop", "API", "Other"].map((item) => <option key={item}>{item}</option>)}</select></Field>
+                  <Field label="Browser/Device"><input value={config.browserDeviceCoverage} onChange={(e) => setConfig({ ...config, browserDeviceCoverage: e.target.value })} placeholder="Chrome, Edge, iPhone" /></Field>
+                </div>
+                <div className="grid two">
+                  <Field label="Preconditions"><textarea value={requirement.preconditions} onChange={(e) => update("preconditions", e.target.value)} /></Field>
+                  <Field label="Business Rules"><textarea value={requirement.businessRules} onChange={(e) => update("businessRules", e.target.value)} /></Field>
+                </div>
+                <div className="grid two">
+                  <Field label="Dependencies"><textarea value={requirement.requirementDescription} onChange={(e) => update("requirementDescription", e.target.value)} placeholder="APIs, services, gateways, queues" /></Field>
+                  <Field label="Additional Notes"><textarea value={requirement.additionalNotes} onChange={(e) => update("additionalNotes", e.target.value)} /></Field>
+                </div>
+              </details>
+            </section>
+
+            <section className="workspace-card compact-upload-section">
+              <div className="source-row">
+                <div className="numbered-title">
+                  <span>2</span>
+                  <div><h2>Add Screenshots</h2><p className="muted">Upload application screens, requirement docs, or mockups.</p></div>
+                </div>
+                <span className="badge">Optional</span>
+              </div>
+              <label className="dropzone">
+                <UploadCloud size={28} />
+                <strong>Drag and drop screenshots here or click to browse</strong>
+                <span>PNG, JPG, WebP - Max 8 MB each</span>
+                <input type="file" multiple accept="image/png,image/jpeg,image/webp" onChange={(e) => void uploadScreenshots(e.target.files)} />
+              </label>
+              <div className="screenshot-grid">
+                {screenshots.map((shot) => (
+                  <article className="screenshot-card" key={shot.id}>
+                    {shot.dataUrl ? <img src={shot.dataUrl} alt={`Preview of ${shot.filename}`} /> : <div className="image-fallback">Preview unavailable</div>}
+                    <div>
+                      <strong>{shot.filename}</strong>
+                      <span>{Math.round(shot.size / 1024)} KB</span>
+                    </div>
+                    <div className="row-actions">
+                      <label className="tiny-file">Replace<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => void uploadScreenshots(e.target.files)} /></label>
+                      <button onClick={() => setScreenshots(screenshots.filter((item) => item.id !== shot.id))}><Trash2 size={16} />Remove</button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+              {screenshots.length > 0 && (
+                <DetectedElementsReview
+                  elements={detectedElements}
+                  setElements={setDetectedElements}
+                  summary={visionSummary}
+                  reports={reports}
+                  onAnalyse={analyseUploadedScreenshots}
+                  busy={busy}
+                  ignore={ignoreScreenshotData}
+                  setIgnore={setIgnoreScreenshotData}
+                />
+              )}
+            </section>
+
+            <section className="workspace-card">
+              <div className="numbered-title">
+                <span>3</span>
+                <div><h2>Configure Coverage</h2><p className="muted">Choose coverage level and additional options for test generation.</p></div>
+              </div>
+              <div className="generation-row">
+                <div className="control-panel test-types-panel">
+                  <h2>Included coverage</h2>
+                  <div className="option-grid compact">
+                    {testTypes.map((type) => (
+                      <label className="check" key={type}>
+                        <input type="checkbox" checked={config.selectedTypes.includes(type)} onChange={() => toggleType(type, config, setConfig)} />
+                        {type}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div className="control-panel">
+                  <Field label="Count"><select value={config.maxCases === 250 ? "Auto" : String(config.maxCases)} onChange={(e) => setCount(e.target.value)}>{["Auto", "10", "20", "30", "50"].map((item) => <option key={item}>{item}</option>)}</select></Field>
+                </div>
+                <div className="control-panel">
+                  <Field label="Coverage Level"><select value={config.detailLevel} onChange={(e) => setConfig({ ...config, detailLevel: e.target.value as GenerationConfig["detailLevel"] })}><option>Concise</option><option>Standard</option><option>Detailed</option></select></Field>
+                  <div className="compact-toggles">
+                    <label><input type="checkbox" checked={config.includeTestData} onChange={(e) => setConfig({ ...config, includeTestData: e.target.checked })} />Test data</label>
+                    <label><input type="checkbox" checked={Boolean(requirement.preconditions || config.includePostconditions)} onChange={(e) => setConfig({ ...config, includePostconditions: e.target.checked })} />Preconditions</label>
+                    <label><input type="checkbox" checked={config.includeAutomationCandidates} onChange={(e) => setConfig({ ...config, includeAutomationCandidates: e.target.checked })} />Automation</label>
+                    <label><input type="checkbox" defaultChecked />Group by AC</label>
+                  </div>
+                </div>
+              </div>
+            </section>
+            {busy && <ProgressList items={progress} />}
           </div>
+
+          <aside className="generation-summary">
+            <h2>Generation Summary</h2>
+            <div className="summary-list">
+              <span><Check size={17} />Requirements <strong className={canGenerate ? "ready-text" : ""}>{readyText}</strong></span>
+              <span><FileSpreadsheet size={17} />Screenshots <strong>{screenshotText}</strong></span>
+              <span><ClipboardCheck size={17} />Coverage Level <strong>{config.detailLevel}</strong></span>
+              <span><BarChart3 size={17} />Unique Behaviors <strong>{uniqueBehaviors}</strong></span>
+              <span><FilePenLine size={17} />Estimated Test Cases <strong>{estimatedCases}</strong></span>
+            </div>
+            <div className="summary-mode">
+              <small>Generation Mode</small>
+              <strong>{visionSummary?.generationMode ?? "Gemini Vision-assisted"}</strong>
+            </div>
+            <Notice type="info" text="Acceptance criteria remain the primary source. Screenshots improve screen names, controls, fields, and navigation when reliable." />
+            <button className="primary big generate-button" onClick={generate} disabled={!canGenerate || Boolean(busy)}>
+              <RefreshCw size={18} />{busy ? "Generating Test Cases..." : "Generate Test Cases"}
+            </button>
+            <button onClick={resetWorkspace}>Reset Page</button>
+          </aside>
         </div>
-        {sourceMode === "Upload Requirement" && (
-          <label className="file-strip">
-            <UploadCloud size={18} />
-            <span>Upload requirement</span>
-            <small>TXT, DOCX, PDF</small>
-            <input type="file" accept=".txt,.docx,.pdf" multiple onChange={(e) => void uploadRequirementFiles(e.target.files)} />
-          </label>
-        )}
-        {requirementFiles.length > 0 && <FileList files={requirementFiles} remove={(name) => setRequirementFiles(requirementFiles.filter((file) => file.name !== name))} />}
-        <Field label="Acceptance Criteria"><textarea className="hero-textarea" value={requirement.acceptanceCriteria} onChange={(e) => update("acceptanceCriteria", e.target.value)} placeholder="Paste acceptance criteria, user story, Given/When/Then scenarios, business rules, or functional requirements..." /></Field>
-        <details className="requirement-details">
-          <summary>+ Add additional context</summary>
-          <div className="grid three">
-            <Field label="Project Name"><input value={requirement.projectName} onChange={(e) => update("projectName", e.target.value)} placeholder="Optional" /></Field>
-            <Field label="Module/Feature Name"><input value={requirement.featureName} onChange={(e) => update("featureName", e.target.value)} placeholder="Optional" /></Field>
-            <Field label="Requirement ID"><input value={requirement.requirementId} onChange={(e) => update("requirementId", e.target.value)} placeholder="Optional" /></Field>
-          </div>
-          <div className="grid three">
-            <Field label="User Role"><input value={requirement.userRole} onChange={(e) => update("userRole", e.target.value)} /></Field>
-            <Field label="Platform"><select value={requirement.platform} onChange={(e) => update("platform", e.target.value)}>{["Web", "Mobile", "Desktop", "API", "Other"].map((item) => <option key={item}>{item}</option>)}</select></Field>
-            <Field label="Browser/Device"><input value={config.browserDeviceCoverage} onChange={(e) => setConfig({ ...config, browserDeviceCoverage: e.target.value })} placeholder="Chrome, Edge, iPhone" /></Field>
-          </div>
-          <div className="grid two">
-            <Field label="Preconditions"><textarea value={requirement.preconditions} onChange={(e) => update("preconditions", e.target.value)} /></Field>
-            <Field label="Business Rules"><textarea value={requirement.businessRules} onChange={(e) => update("businessRules", e.target.value)} /></Field>
-          </div>
-          <div className="grid two">
-            <Field label="Dependencies"><textarea value={requirement.requirementDescription} onChange={(e) => update("requirementDescription", e.target.value)} placeholder="APIs, services, gateways, queues" /></Field>
-            <Field label="Additional Notes"><textarea value={requirement.additionalNotes} onChange={(e) => update("additionalNotes", e.target.value)} /></Field>
-          </div>
-        </details>
-      </section>}
+      )}
 
       {workMode === "Review Coverage" && <section className="form-section">
         <div className="source-row">
           <h2>Acceptance Criteria</h2>
         </div>
         <Field label="Acceptance Criteria"><textarea className="hero-textarea" value={requirement.acceptanceCriteria} onChange={(e) => update("acceptanceCriteria", e.target.value)} placeholder="Paste acceptance criteria to compare against the uploaded existing test cases..." /></Field>
-      </section>}
-
-      {workMode === "Generate New" && <section className="form-section compact-upload-section">
-        <div className="compact-title">
-          <h2>Interface Screenshots</h2>
-          <span className="badge">Optional</span>
-        </div>
-        <label className="dropzone compact-dropzone">
-          <UploadCloud size={20} />
-          <strong>Drop screenshots here or browse</strong>
-          <span>PNG, JPG or WebP</span>
-          <input type="file" multiple accept="image/png,image/jpeg,image/webp" onChange={(e) => void uploadScreenshots(e.target.files)} />
-        </label>
-        <div className="screenshot-grid">
-          {screenshots.map((shot) => (
-            <article className="screenshot-card" key={shot.id}>
-              {shot.dataUrl ? <img src={shot.dataUrl} alt={`Preview of ${shot.filename}`} /> : <div className="image-fallback">Preview unavailable</div>}
-              <div>
-                <strong>{shot.filename}</strong>
-                <span>{Math.round(shot.size / 1024)} KB</span>
-              </div>
-              <div className="row-actions">
-                <label className="tiny-file">Replace<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => void uploadScreenshots(e.target.files)} /></label>
-                <button onClick={() => setScreenshots(screenshots.filter((item) => item.id !== shot.id))}><Trash2 size={16} />Remove</button>
-              </div>
-            </article>
-          ))}
-        </div>
-        {screenshots.length > 0 && (
-          <DetectedElementsReview
-            elements={detectedElements}
-            setElements={setDetectedElements}
-            summary={visionSummary}
-            reports={reports}
-            onAnalyse={analyseUploadedScreenshots}
-            busy={busy}
-            ignore={ignoreScreenshotData}
-            setIgnore={setIgnoreScreenshotData}
-          />
-        )}
-      </section>}
-
-      {workMode === "Generate New" && <section className="form-section generation-row">
-        <div className="control-panel test-types-panel">
-          <h2>Test Types</h2>
-          <div className="option-grid compact">
-            {testTypes.map((type) => (
-              <label className="check" key={type}>
-                <input type="checkbox" checked={config.selectedTypes.includes(type)} onChange={() => toggleType(type, config, setConfig)} />
-                {type}
-              </label>
-            ))}
-          </div>
-        </div>
-        <div className="control-panel">
-          <Field label="Count"><select value={config.maxCases === 250 ? "Auto" : String(config.maxCases)} onChange={(e) => setCount(e.target.value)}>{["Auto", "10", "20", "30", "50"].map((item) => <option key={item}>{item}</option>)}</select></Field>
-        </div>
-        <div className="control-panel">
-          <Field label="Format"><select value={config.detailLevel} onChange={(e) => setConfig({ ...config, detailLevel: e.target.value as GenerationConfig["detailLevel"] })}><option>Concise</option><option>Standard</option><option>Detailed</option></select></Field>
-          <div className="compact-toggles">
-            <label><input type="checkbox" checked={config.includeTestData} onChange={(e) => setConfig({ ...config, includeTestData: e.target.checked })} />Test data</label>
-            <label><input type="checkbox" checked={Boolean(requirement.preconditions || config.includePostconditions)} onChange={(e) => setConfig({ ...config, includePostconditions: e.target.checked })} />Preconditions</label>
-            <label><input type="checkbox" checked={config.includeAutomationCandidates} onChange={(e) => setConfig({ ...config, includeAutomationCandidates: e.target.checked })} />Automation</label>
-            <label><input type="checkbox" defaultChecked />Group by AC</label>
-          </div>
-        </div>
       </section>}
 
       {workMode === "Refine Existing" && (
@@ -545,16 +642,13 @@ function GenerateTab(props: {
         </section>
       )}
 
-      {busy && <ProgressList items={progress} />}
+      {busy && workMode !== "Generate New" && <ProgressList items={progress} />}
       <div className="actions">
         {workMode === "Refine Existing" && <button className="primary big" onClick={() => existingCaseFile && refineExistingExcel(existingCaseFile)} disabled={Boolean(busy) || !existingCaseFile}>
           <Check size={18} />{busy === "Refining" ? "Refining Existing Cases..." : "Refine Existing Test Cases"}
         </button>}
         {workMode === "Review Coverage" && <button className="primary big" onClick={() => existingCaseFile && reviewExistingCoverage(existingCaseFile)} disabled={Boolean(busy) || !existingCaseFile || !canGenerate}>
           <Search size={18} />{busy === "Reviewing coverage" ? "Reviewing Coverage..." : "Review Coverage"}
-        </button>}
-        {workMode === "Generate New" && <button className="primary big generate-button" onClick={generate} disabled={!canGenerate || Boolean(busy)}>
-          <RefreshCw size={18} />{busy ? "Generating Test Cases..." : "Generate Test Cases"}
         </button>}
       </div>
     </article>
