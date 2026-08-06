@@ -149,6 +149,28 @@ export default {
         return json({ ok: true, data: { generation: draft, coverage: calculateCoverage(draft) } });
       }
 
+      if (request.method === "POST" && url.pathname === "/api/generations/export") {
+        const body = await request.json() as { generation?: Generation; config?: AzureExportConfig };
+        if (!body.generation) return json(fail("UPLOAD_VALIDATION", "Generation payload is required for Excel export."), 400);
+        const generation = generationSchema.parse(body.generation);
+        const filename = buildFilename(generation);
+        return excelResponse(buildAzureImportXlsx(generation, body.config ?? {}), filename);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/generations/html") {
+        const body = await request.json() as { generation?: Generation; previousGenerations?: Generation[] };
+        if (!body.generation) return json(fail("UPLOAD_VALIDATION", "Generation payload is required for HTML export."), 400);
+        const generation = generationSchema.parse(body.generation);
+        const previousGenerations = (body.previousGenerations ?? []).map((item) => generationSchema.parse(item));
+        const filename = buildHtmlFilename(generation);
+        return new Response(buildHtmlReport(generation, previousGenerations), {
+          headers: {
+            "content-type": "text/html; charset=utf-8",
+            "content-disposition": `inline; filename="${filename}"`
+          }
+        });
+      }
+
       if (request.method === "GET" && url.pathname === "/api/generations") {
         return json({ ok: true, data: { generations } });
       }

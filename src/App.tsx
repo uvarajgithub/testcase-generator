@@ -308,7 +308,7 @@ export function App() {
       const saved = await api.updateGeneration(generation);
       setGeneration(saved.generation);
       setCoverage(saved.coverage);
-      const filename = await api.exportExcel(saved.generation.id, {
+      const filename = await api.exportExcel(saved.generation, {
         ...azureConfig,
         areaPath: azureConfig.areaPath || `${saved.generation.requirement.projectName}\\${saved.generation.requirement.moduleName}`
       });
@@ -327,7 +327,7 @@ export function App() {
     setBusy("Opening HTML");
     setError("");
     try {
-      await api.openHtml(generation.id);
+      await api.openHtml(generation, generations.filter((item) => item.id !== generation.id));
       setMessage("HTML report opened in a new browser tab.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "HTML report could not be opened. Try again after saving the generation.");

@@ -140,7 +140,7 @@ function text(value: string) {
 }
 
 function safeCell(value: unknown) {
-  const textValue = String(value ?? "").replace(/\u0000/g, "");
+  const textValue = String(value ?? "").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
   return /^[=+\-@]/.test(textValue) ? `'${textValue}` : textValue;
 }
 
@@ -149,7 +149,12 @@ function truncateTitle(value: string) {
 }
 
 function escapeXml(value: string | number) {
-  return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return String(value)
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 function columnName(index: number) {

@@ -113,9 +113,12 @@ export const api = {
   generations: () => request<{ generations: Generation[] }>("/api/generations"),
   templates: () => request<{ templates: Array<{ id: string; name: string; platform: string; selectedTypes: string[]; instructions: string }> }>("/api/templates"),
   settings: () => request<{ settings: Record<string, unknown>; aiConfigured: boolean }>("/api/settings"),
-  exportExcel: async (generationId: string, config?: { areaPath?: string; assignedTo?: string; state?: string }) => {
-    const response = await fetch(`/api/generations/${generationId}/export`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(config ?? {}) });
-    if (!response.ok) throw new Error("Excel export failed.");
+  exportExcel: async (generation: Generation, config?: { areaPath?: string; assignedTo?: string; state?: string }) => {
+    const response = await fetch("/api/generations/export", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ generation, config: config ?? {} }) });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null) as ApiResponse<unknown> | null;
+      throw new Error(body && !body.ok ? body.error.message : `Excel export failed with status ${response.status}.`);
+    }
     const blob = await response.blob();
     const disposition = response.headers.get("content-disposition") ?? "";
     const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? "TestCraft_Test_Cases.xlsx";
@@ -185,9 +188,16 @@ export const api = {
     }, 1000);
     return filename;
   },
-  openHtml: async (generationId: string) => {
-    const response = await fetch(`/api/generations/${generationId}/html`, { method: "POST" });
-    if (!response.ok) throw new Error("HTML report export failed.");
+  openHtml: async (generation: Generation, previousGenerations: Generation[] = []) => {
+    const response = await fetch("/api/generations/html", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ generation, previousGenerations })
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null) as ApiResponse<unknown> | null;
+      throw new Error(body && !body.ok ? body.error.message : `HTML report export failed with status ${response.status}.`);
+    }
     const html = await response.text();
     const blob = new Blob([html], { type: "text/html" });
     const url = URL.createObjectURL(blob);

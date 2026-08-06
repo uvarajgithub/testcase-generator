@@ -207,6 +207,32 @@ const server = createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true, data: { generation: draft, coverage: calculateCoverage(draft) } });
     }
 
+    if (req.method === "POST" && url.pathname === "/api/generations/export") {
+      const body = await readJson<{ generation?: Generation; config?: AzureExportConfig }>(req);
+      if (!body.generation) return sendJson(res, 400, fail("UPLOAD_VALIDATION", "Generation payload is required for Excel export."));
+      const generation = generationSchema.parse(body.generation);
+      const filename = buildFilename(generation);
+      const buffer = await buildWorkbook(generation, [], body.config ?? {});
+      res.writeHead(200, {
+        "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "content-disposition": `attachment; filename="${filename}"`
+      });
+      return res.end(Buffer.from(buffer));
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/generations/html") {
+      const body = await readJson<{ generation?: Generation; previousGenerations?: Generation[] }>(req);
+      if (!body.generation) return sendJson(res, 400, fail("UPLOAD_VALIDATION", "Generation payload is required for HTML export."));
+      const generation = generationSchema.parse(body.generation);
+      const previousGenerations = (body.previousGenerations ?? []).map((item) => generationSchema.parse(item));
+      const filename = buildHtmlFilename(generation);
+      res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "content-disposition": `inline; filename="${filename}"`
+      });
+      return res.end(buildHtmlReport(generation, previousGenerations));
+    }
+
     if (req.method === "GET" && url.pathname === "/api/generations") {
       const db = await readDb();
       return sendJson(res, 200, { ok: true, data: { generations: db.generations } });
