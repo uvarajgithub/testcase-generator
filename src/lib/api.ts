@@ -157,8 +157,18 @@ export const api = {
     form.append("mode", mode);
     const response = await fetch("/api/review-existing-coverage/export", { method: "POST", body: form });
     if (!response.ok) {
-      const body = await response.json().catch(() => null) as ApiResponse<unknown> | null;
-      throw new Error(body && !body.ok ? body.error.message : "Coverage review Excel export failed.");
+      const contentType = response.headers.get("content-type") ?? "";
+      if (contentType.includes("json")) {
+        const body = await response.json().catch(() => null) as ApiResponse<unknown> | null;
+        throw new Error(body && !body.ok ? body.error.message : `Coverage review Excel export failed with status ${response.status}.`);
+      }
+      const text = (await response.text().catch(() => "")).trim();
+      throw new Error(text ? `Coverage review Excel export failed (${response.status}): ${text}` : `Coverage review Excel export failed with status ${response.status}.`);
+    }
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!contentType.includes("spreadsheet") && !contentType.includes("excel") && !contentType.includes("octet-stream")) {
+      const text = (await response.text().catch(() => "")).trim();
+      throw new Error(text ? `Coverage review Excel export failed: ${text}` : "Coverage review Excel export did not return a workbook.");
     }
     const blob = await response.blob();
     const disposition = response.headers.get("content-disposition") ?? "";

@@ -61,11 +61,7 @@ export async function buildWorkbook(generation: Generation, previousGenerations:
 }
 
 export async function buildRefinedWorkbook(input: ArrayBuffer | Uint8Array, originalName = "Existing_Test_Cases.xlsx", azureConfig: AzureExportConfig = {}) {
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(toWorkbookBuffer(input));
-  const parsedCases = parseUploadedTestCases(workbook);
-  if (!parsedCases.length) throw new Error("No test cases were found in the uploaded workbook. Upload an Excel file with Title, Test Step, Step Action, and Step Expected columns.");
-  const generation = refinedGeneration(parsedCases, originalName);
+  const generation = await refinedGenerationFromWorkbook(input, originalName);
   const buffer = await buildWorkbook(generation, [], azureConfig);
   const stamp = new Date().toISOString().slice(0, 16).replace("T", "_").replace(":", "-");
   return {
@@ -73,6 +69,14 @@ export async function buildRefinedWorkbook(input: ArrayBuffer | Uint8Array, orig
     filename: `${sanitizeFilename("Refined_" + originalName.replace(/\.[^.]+$/, ""))}_Azure_DevOps_Test_Cases_${stamp}.xlsx`,
     count: generation.testCases.length
   };
+}
+
+export async function refinedGenerationFromWorkbook(input: ArrayBuffer | Uint8Array, originalName = "Existing_Test_Cases.xlsx") {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(toWorkbookBuffer(input));
+  const parsedCases = parseUploadedTestCases(workbook);
+  if (!parsedCases.length) throw new Error("No test cases were found in the uploaded workbook. Upload an Excel file with Title, Test Step, Step Action, and Step Expected columns.");
+  return refinedGeneration(parsedCases, originalName);
 }
 
 function toWorkbookBuffer(input: ArrayBuffer | Uint8Array): ExcelJS.Buffer {

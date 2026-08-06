@@ -339,6 +339,7 @@ export function App() {
   return (
     <Shell active={active} setActive={setActive} health={health} titleOverride={active === "Generate" ? workflowCopy[testCaseWorkflow].title : undefined} subtitleOverride={active === "Generate" ? workflowCopy[testCaseWorkflow].subtitle : undefined}>
       {message && <div className="toast" role="status">{message}</div>}
+      {error && <div className="toast error-toast" role="alert">{error}</div>}
       {busy && <BusyOverlay label={busy} items={progress} />}
       <section className={`page ${["Review Test Cases", "Coverage", "Export History"].includes(active) ? "page-wide" : ""}`}>
         {error && <Notice type="error" text={error} />}

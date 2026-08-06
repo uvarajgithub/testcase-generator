@@ -82,7 +82,7 @@ export async function buildCoverageReviewWorkbook(input: ArrayBuffer | Uint8Arra
   };
 }
 
-async function analyseExistingCoverage(input: ArrayBuffer | Uint8Array, requirement: RequirementInput, originalName: string) {
+export async function analyseExistingCoverage(input: ArrayBuffer | Uint8Array, requirement: RequirementInput, originalName: string) {
   const workbook = new ExcelJS.Workbook();
   try {
     await workbook.xlsx.load(toWorkbookBuffer(input));

@@ -1,10 +1,11 @@
 import { calculateCoverage, generateCases, inferElementsFromRequirement, newGenerationId, parseAcceptanceCriteria } from "../src/lib/analysis";
 import { generationConfigSchema, generationSchema, requirementSchema, type Generation } from "../src/lib/schemas";
-import { buildFilename, buildRefinedWorkbook, buildWorkbook, type AzureExportConfig } from "./lib/excel";
+import { buildFilename, refinedGenerationFromWorkbook, type AzureExportConfig } from "./lib/excel";
 import { buildHtmlFilename, buildHtmlReport } from "./lib/html";
 import { STATIC_ASSETS } from "./generated-assets";
 import { analyseScreenshots, publicVisionStatus } from "./lib/vision";
-import { buildCoverageReviewWorkbook, reviewExistingCoverage } from "./lib/coverageReview";
+import { analyseExistingCoverage, reviewExistingCoverage } from "./lib/coverageReview";
+import { azureImportFilename, buildAzureImportXlsx } from "./lib/simpleXlsx";
 
 type Env = Record<string, unknown>;
 type ApiFailure = { ok: false; error: { code: string; message: string; details?: unknown } };
@@ -64,13 +65,9 @@ export default {
         const file = form.get("workbook");
         if (!(file instanceof File)) return json(fail("UPLOAD_VALIDATION", "Upload an existing test-case Excel file."), 400);
         if (!/\.(xlsx|xls)$/i.test(file.name)) return json(fail("UPLOAD_VALIDATION", "Upload an Excel workbook as .xlsx or .xls."), 400);
-        const result = await buildRefinedWorkbook(await file.arrayBuffer(), file.name);
-        return new Response(result.buffer, {
-          headers: {
-            "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "content-disposition": `attachment; filename="${result.filename}"`
-          }
-        });
+        const generation = await refinedGenerationFromWorkbook(await file.arrayBuffer(), file.name);
+        const filename = azureImportFilename(generation, "_Refined");
+        return excelResponse(buildAzureImportXlsx(generation), filename);
       }
 
       if (request.method === "POST" && url.pathname === "/api/review-existing-coverage") {
@@ -90,13 +87,30 @@ export default {
         if (!/\.(xlsx|xls)$/i.test(file.name)) return json(fail("UPLOAD_VALIDATION", "Upload an Excel workbook as .xlsx or .xls."), 400);
         const requirement = requirementSchema.parse(JSON.parse(String(form.get("requirement") ?? "{}")));
         const mode = String(form.get("mode") ?? "suggested-only") === "merge-with-existing" ? "merge-with-existing" : "suggested-only";
-        const result = await buildCoverageReviewWorkbook(await file.arrayBuffer(), requirement, mode, file.name);
-        return new Response(result.buffer, {
-          headers: {
-            "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "content-disposition": `attachment; filename="${result.filename}"`
-          }
-        });
+        const { review, existingGeneration, criteria } = await analyseExistingCoverage(await file.arrayBuffer(), requirement, file.name);
+        if (!review.suggestedTestCases.length) return json(fail("NO_SUGGESTIONS", "No missing coverage suggestions are available to export."), 400);
+        const generation: Generation = {
+          ...existingGeneration,
+          id: `COV-${Date.now().toString().slice(-8)}`,
+          requirement: {
+            ...requirement,
+            projectName: requirement.projectName || existingGeneration.requirement.projectName,
+            moduleName: requirement.moduleName || "Coverage Review",
+            featureName: requirement.featureName || "Missing coverage suggestions",
+            requirementId: requirement.requirementId || "COVERAGE-REVIEW",
+            requirementTitle: requirement.requirementTitle || "Review coverage gaps"
+          },
+          criteria,
+          testCases: mode === "merge-with-existing" ? [...existingGeneration.testCases, ...review.suggestedTestCases] : review.suggestedTestCases,
+          assumptions: [
+            "Generated from Review Coverage after comparing uploaded existing test cases with acceptance criteria.",
+            mode === "merge-with-existing" ? "Workbook includes refined existing test cases plus suggested missing coverage." : "Workbook includes suggested missing coverage only."
+          ],
+          warnings: review.warnings,
+          updatedAt: new Date().toISOString(),
+          exportHistory: []
+        };
+        return excelResponse(buildAzureImportXlsx(generation), azureImportFilename(generation, mode === "merge-with-existing" ? "_Merged_Coverage" : "_Suggested_Missing_Coverage"));
       }
 
       if (request.method === "POST" && url.pathname === "/api/analyze") {
@@ -153,15 +167,10 @@ export default {
         if (!generation) return json(fail("NOT_FOUND", "Generation was not found."), 404);
         const exportConfig = await request.json().catch(() => ({})) as AzureExportConfig;
         const filename = buildFilename(generation);
-        const buffer = await buildWorkbook(generation, generations.filter((item) => item.id !== id), exportConfig);
+        const buffer = buildAzureImportXlsx(generation, exportConfig);
         generation.exportHistory.push({ filename, exportedAt: new Date().toISOString() });
         upsertGeneration(generation);
-        return new Response(buffer, {
-          headers: {
-            "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "content-disposition": `attachment; filename="${filename}"`
-          }
-        });
+        return excelResponse(buffer, filename);
       }
 
       if (request.method === "POST" && url.pathname.match(/^\/api\/generations\/[^/]+\/html$/)) {
@@ -213,6 +222,16 @@ function json(body: unknown, status = 200) {
       "access-control-allow-origin": "*",
       "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
       "access-control-allow-headers": "content-type"
+    }
+  });
+}
+
+function excelResponse(buffer: Uint8Array, filename: string) {
+  return new Response(buffer.slice(), {
+    headers: {
+      "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "content-disposition": `attachment; filename="${filename}"`,
+      "cache-control": "no-store"
     }
   });
 }
