@@ -2,6 +2,7 @@ import ExcelJS from "exceljs";
 import { generateCases, parseAcceptanceCriteria } from "../../src/lib/analysis";
 import { validateAzureTestCases } from "../../src/lib/format";
 import type { AcceptanceCriterion, Generation, RequirementInput, TestCase } from "../../src/lib/schemas";
+import { buildFilename, buildWorkbook, type AzureExportConfig } from "./excel";
 import { parseUploadedTestCases, refinedGeneration } from "./excel";
 
 export type CoverageReviewStatus = "Covered" | "Partial" | "Missing";
@@ -14,6 +15,12 @@ export type CoverageReviewItem = {
   matchedTestCases: string[];
   evidence: string;
   recommendation: string;
+  reviewComments: Array<{
+    severity: "Info" | "Warning" | "Required";
+    title: string;
+    comment: string;
+    suggestedAction: string;
+  }>;
 };
 
 export type CoverageReviewResult = {
@@ -36,13 +43,58 @@ export type CoverageReviewResult = {
 };
 
 export async function reviewExistingCoverage(input: ArrayBuffer | Uint8Array, requirement: RequirementInput, originalName = "Existing_Test_Cases.xlsx"): Promise<CoverageReviewResult> {
+  const { review } = await analyseExistingCoverage(input, requirement, originalName);
+  return review;
+}
+
+export async function buildCoverageReviewWorkbook(input: ArrayBuffer | Uint8Array, requirement: RequirementInput, mode: "suggested-only" | "merge-with-existing", originalName = "Existing_Test_Cases.xlsx", azureConfig: AzureExportConfig = {}) {
+  const { review, existingGeneration, criteria } = await analyseExistingCoverage(input, requirement, originalName);
+  if (!review.suggestedTestCases.length) throw new Error("No missing coverage suggestions are available to export.");
+  const now = new Date().toISOString();
+  const testCases = mode === "merge-with-existing"
+    ? [...existingGeneration.testCases, ...review.suggestedTestCases]
+    : review.suggestedTestCases;
+  const generation: Generation = {
+    ...existingGeneration,
+    id: `COV-${Date.now().toString().slice(-8)}`,
+    requirement: {
+      ...requirement,
+      projectName: requirement.projectName || existingGeneration.requirement.projectName,
+      moduleName: requirement.moduleName || "Coverage Review",
+      featureName: requirement.featureName || "Missing coverage suggestions",
+      requirementId: requirement.requirementId || "COVERAGE-REVIEW",
+      requirementTitle: requirement.requirementTitle || "Review coverage gaps"
+    },
+    criteria,
+    testCases,
+    assumptions: [
+      "Generated from Review Coverage after comparing uploaded existing test cases with acceptance criteria.",
+      mode === "merge-with-existing" ? "Workbook includes refined existing test cases plus suggested missing coverage." : "Workbook includes suggested missing coverage only."
+    ],
+    warnings: review.warnings,
+    updatedAt: now,
+    exportHistory: []
+  };
+  const buffer = await buildWorkbook(generation, [], azureConfig);
+  return {
+    buffer,
+    filename: buildFilename(generation).replace(".xlsx", mode === "merge-with-existing" ? "_Merged_Coverage.xlsx" : "_Suggested_Missing_Coverage.xlsx")
+  };
+}
+
+async function analyseExistingCoverage(input: ArrayBuffer | Uint8Array, requirement: RequirementInput, originalName: string) {
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(toWorkbookBuffer(input));
+  try {
+    await workbook.xlsx.load(toWorkbookBuffer(input));
+  } catch {
+    throw new Error("The uploaded workbook could not be read. Upload a valid .xlsx file exported from Excel or Azure DevOps.");
+  }
   const uploadedCases = parseUploadedTestCases(workbook);
   if (!uploadedCases.length) throw new Error("No test cases were found in the uploaded workbook. Upload an Excel file with Title, Test Step, Step Action, and Step Expected columns.");
 
   const existingGeneration = refinedGeneration(uploadedCases, originalName);
   const criteria = parseAcceptanceCriteria(requirement.acceptanceCriteria);
+  if (!criteria.length) throw new Error("No acceptance criteria were detected. Add clear acceptance criteria before reviewing coverage.");
   const reviewItems = criteria.map((criterion) => reviewCriterion(criterion, existingGeneration.testCases));
   const missingCriteria = new Set(reviewItems.filter((item) => item.status !== "Covered").map((item) => item.acId));
   const suggestedTestCases = generateMissingSuggestions(requirement, criteria, missingCriteria);
@@ -52,7 +104,7 @@ export async function reviewExistingCoverage(input: ArrayBuffer | Uint8Array, re
   const partial = reviewItems.filter((item) => item.status === "Partial").length;
   const missing = reviewItems.filter((item) => item.status === "Missing").length;
 
-  return {
+  const review = {
     summary: {
       totalAcceptanceCriteria: criteria.length,
       existingTestCases: existingGeneration.testCases.length,
@@ -73,6 +125,7 @@ export async function reviewExistingCoverage(input: ArrayBuffer | Uint8Array, re
       "Suggested missing test cases use the same Azure title, step, and export validation rules as generated test cases."
     ]
   };
+  return { review, existingGeneration, criteria };
 }
 
 function reviewCriterion(criterion: AcceptanceCriterion, testCases: TestCase[]): CoverageReviewItem {
@@ -93,8 +146,34 @@ function reviewCriterion(criterion: AcceptanceCriterion, testCases: TestCase[]):
       ? "No additional test case is required for this acceptance criterion."
       : status === "Partial"
         ? "Add or update test steps so the exact action, validation, and expected result from this acceptance criterion are measurable."
-        : "Add new positive, negative, validation, edge, and security coverage for this acceptance criterion."
+        : "Add new positive, negative, validation, edge, and security coverage for this acceptance criterion.",
+    reviewComments: reviewCommentsForCriterion(criterion, status, best?.testCase.title, best ? Math.round(best.score * 100) : 0)
   };
+}
+
+function reviewCommentsForCriterion(criterion: AcceptanceCriterion, status: CoverageReviewStatus, bestTitle: string | undefined, score: number): CoverageReviewItem["reviewComments"] {
+  if (status === "Covered") {
+    return [{
+      severity: "Info",
+      title: `${criterion.id} is covered`,
+      comment: `Existing test coverage matches this acceptance criterion with ${score}% confidence.`,
+      suggestedAction: "No new test case is required unless the reviewer wants additional edge or security depth."
+    }];
+  }
+  if (status === "Partial") {
+    return [{
+      severity: "Warning",
+      title: `${criterion.id} is partially covered`,
+      comment: `Closest existing test case${bestTitle ? ` "${bestTitle}"` : ""} does not fully prove the required behaviour: ${criterion.text}`,
+      suggestedAction: "Update the matched test case or add a new test case with concrete step actions and measurable expected results."
+    }];
+  }
+  return [{
+    severity: "Required",
+    title: `${criterion.id} missing coverage`,
+    comment: `No existing uploaded test case clearly covers this acceptance criterion: ${criterion.text}`,
+    suggestedAction: "Generate and review suggested missing test cases before exporting to Azure DevOps."
+  }];
 }
 
 function generateMissingSuggestions(requirement: RequirementInput, criteria: AcceptanceCriterion[], missingCriteria: Set<string>) {
@@ -166,6 +245,6 @@ function caseText(testCase: TestCase) {
 
 function toWorkbookBuffer(input: ArrayBuffer | Uint8Array): ExcelJS.Buffer {
   if (input instanceof Uint8Array) return input as unknown as ExcelJS.Buffer;
-  if (input instanceof ArrayBuffer) return input as ExcelJS.Buffer;
+  if (input instanceof ArrayBuffer) return new Uint8Array(input) as unknown as ExcelJS.Buffer;
   return input;
 }

@@ -136,6 +136,13 @@ p { margin: 0; }
 .coverage-review { display: grid; gap: 14px; }
 .review-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(280px, .9fr); gap: 14px; align-items: start; }
 .review-list { display: grid; gap: 10px; }
+.review-comment-list { display: grid; gap: 10px; }
+.review-comment { border: 1px solid var(--line); border-left-width: 4px; border-radius: 10px; padding: 12px; background: #fff; display: grid; gap: 8px; }
+.review-comment.required { border-left-color: var(--red); background: #fff7f7; }
+.review-comment.warning { border-left-color: var(--amber); background: #fffbeb; }
+.review-comment.info { border-left-color: var(--green); background: #f3fcf7; }
+.review-comment h3 { margin: 0; font-size: 14px; }
+.export-choice-panel { border: 1px solid #d7e2ff; background: #f7f9ff; border-radius: 12px; padding: 14px; display: grid; gap: 12px; }
 .coverage-item { border: 1px solid var(--line); border-left-width: 4px; border-radius: 10px; padding: 12px; display: grid; gap: 8px; background: #fff; }
 .coverage-item.covered { border-left-color: var(--green); }
 .coverage-item.partial { border-left-color: var(--amber); }

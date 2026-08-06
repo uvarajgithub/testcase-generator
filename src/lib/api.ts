@@ -58,6 +58,12 @@ export type CoverageReviewResult = {
     matchedTestCases: string[];
     evidence: string;
     recommendation: string;
+    reviewComments: Array<{
+      severity: "Info" | "Warning" | "Required";
+      title: string;
+      comment: string;
+      suggestedAction: string;
+    }>;
   }>;
   duplicateTitles: string[];
   weakCases: Array<{ title: string; issue: string }>;
@@ -143,6 +149,26 @@ export const api = {
     form.append("requirement", JSON.stringify(requirement));
     form.append("workbook", file);
     return request<{ review: CoverageReviewResult }>("/api/review-existing-coverage", { method: "POST", body: form });
+  },
+  exportCoverageReviewExcel: async (requirement: RequirementInput, file: File, mode: "suggested-only" | "merge-with-existing") => {
+    const form = new FormData();
+    form.append("requirement", JSON.stringify(requirement));
+    form.append("workbook", file);
+    form.append("mode", mode);
+    const response = await fetch("/api/review-existing-coverage/export", { method: "POST", body: form });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null) as ApiResponse<unknown> | null;
+      throw new Error(body && !body.ok ? body.error.message : "Coverage review Excel export failed.");
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get("content-disposition") ?? "";
+    const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? "Coverage_Review_Suggestions.xlsx";
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    return filename;
   },
   openHtml: async (generationId: string) => {
     const response = await fetch(`/api/generations/${generationId}/html`, { method: "POST" });

@@ -4,7 +4,7 @@ import { buildFilename, buildRefinedWorkbook, buildWorkbook, type AzureExportCon
 import { buildHtmlFilename, buildHtmlReport } from "./lib/html";
 import { STATIC_ASSETS } from "./generated-assets";
 import { analyseScreenshots, publicVisionStatus } from "./lib/vision";
-import { reviewExistingCoverage } from "./lib/coverageReview";
+import { buildCoverageReviewWorkbook, reviewExistingCoverage } from "./lib/coverageReview";
 
 type Env = Record<string, unknown>;
 type ApiFailure = { ok: false; error: { code: string; message: string; details?: unknown } };
@@ -81,6 +81,22 @@ export default {
         const requirement = requirementSchema.parse(JSON.parse(String(form.get("requirement") ?? "{}")));
         const review = await reviewExistingCoverage(await file.arrayBuffer(), requirement, file.name);
         return json({ ok: true, data: { review } });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/review-existing-coverage/export") {
+        const form = await request.formData();
+        const file = form.get("workbook");
+        if (!(file instanceof File)) return json(fail("UPLOAD_VALIDATION", "Upload an existing test-case Excel file."), 400);
+        if (!/\.(xlsx|xls)$/i.test(file.name)) return json(fail("UPLOAD_VALIDATION", "Upload an Excel workbook as .xlsx or .xls."), 400);
+        const requirement = requirementSchema.parse(JSON.parse(String(form.get("requirement") ?? "{}")));
+        const mode = String(form.get("mode") ?? "suggested-only") === "merge-with-existing" ? "merge-with-existing" : "suggested-only";
+        const result = await buildCoverageReviewWorkbook(await file.arrayBuffer(), requirement, mode, file.name);
+        return new Response(result.buffer, {
+          headers: {
+            "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "content-disposition": `attachment; filename="${result.filename}"`
+          }
+        });
       }
 
       if (request.method === "POST" && url.pathname === "/api/analyze") {

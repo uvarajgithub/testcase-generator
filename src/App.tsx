@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Shell } from "./components/Shell";
 import { Field } from "./components/Field";
 import { api, type CoverageReviewResult, type ScreenshotAnalysisReport, type VisionSummary } from "./lib/api";
-import { calculateCoverage, inferRequirementModel, isDocumentHeading, normalizeRequirementText } from "./lib/analysis";
+import { calculateCoverage, inferRequirementModel, isDocumentHeading, normalizeRequirementText, parseAcceptanceCriteria } from "./lib/analysis";
 import { azureCaseRows, validateAzureTestCases } from "./lib/format";
 import { generationConfigSchema, priorities, testTypes, type CoverageSummary, type Generation, type GenerationConfig, type RequirementInput, type TestCase } from "./lib/schemas";
 
@@ -265,6 +265,43 @@ export function App() {
     }
   }
 
+  async function exportCoverageReviewExcel(file: File, mode: "suggested-only" | "merge-with-existing") {
+    if (!coverageReview || !requirement.acceptanceCriteria.trim()) return;
+    setBusy("Exporting coverage review");
+    setError("");
+    try {
+      const filename = await api.exportCoverageReviewExcel(withDefaults(requirement, requirementFiles), file, mode);
+      setMessage(`Downloaded ${filename}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Coverage review Excel export failed.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function openCoverageSuggestionsForReview() {
+    if (!coverageReview?.suggestedTestCases.length) return;
+    const prepared = withDefaults(requirement, requirementFiles);
+    const now = new Date().toISOString();
+    const draft: Generation = {
+      id: `COV-${Date.now().toString().slice(-8)}`,
+      requirement: prepared,
+      criteria: parseAcceptanceCriteria(prepared.acceptanceCriteria),
+      screenshots: [],
+      detectedElements: [],
+      config,
+      testCases: coverageReview.suggestedTestCases,
+      assumptions: ["Created from Review Coverage missing-gap suggestions."],
+      ambiguities: [],
+      warnings: coverageReview.warnings,
+      createdAt: now,
+      updatedAt: now,
+      exportHistory: []
+    };
+    await saveGeneration(draft, "Suggested missing coverage cases opened for review.");
+    setActive("Review Test Cases");
+  }
+
   async function saveGeneration(next: Generation, toast = "Draft saved.") {
     const data = await api.updateGeneration(next);
     setGeneration(data.generation);
@@ -347,6 +384,8 @@ export function App() {
             generate={generate}
             refineExistingExcel={refineExistingExcel}
             reviewExistingCoverage={reviewExistingCoverage}
+            exportCoverageReviewExcel={exportCoverageReviewExcel}
+            openCoverageSuggestionsForReview={openCoverageSuggestionsForReview}
             coverageReview={coverageReview}
             resetWorkspace={resetWorkspace}
             busy={busy}
@@ -431,15 +470,18 @@ function GenerateTab(props: {
   generate: () => void;
   refineExistingExcel: (file: File) => void;
   reviewExistingCoverage: (file: File) => void;
+  exportCoverageReviewExcel: (file: File, mode: "suggested-only" | "merge-with-existing") => void;
+  openCoverageSuggestionsForReview: () => void;
   coverageReview: CoverageReviewResult | null;
   resetWorkspace: () => void;
   busy: string;
   progress: string[];
 }) {
-  const { workMode, setWorkMode, requirement, setRequirement, requirementFiles, setRequirementFiles, uploadRequirementFiles, screenshots, setScreenshots, uploadScreenshots, analyseUploadedScreenshots, detectedElements, setDetectedElements, visionSummary, reports, ignoreScreenshotData, setIgnoreScreenshotData, config, setConfig, generate, refineExistingExcel, reviewExistingCoverage, coverageReview, resetWorkspace, busy, progress } = props;
+  const { workMode, setWorkMode, requirement, setRequirement, requirementFiles, setRequirementFiles, uploadRequirementFiles, screenshots, setScreenshots, uploadScreenshots, analyseUploadedScreenshots, detectedElements, setDetectedElements, visionSummary, reports, ignoreScreenshotData, setIgnoreScreenshotData, config, setConfig, generate, refineExistingExcel, reviewExistingCoverage, exportCoverageReviewExcel, openCoverageSuggestionsForReview, coverageReview, resetWorkspace, busy, progress } = props;
   const [sourceMode, setSourceMode] = useState<"Manual Entry" | "Upload Requirement">("Manual Entry");
   const [refineCaseFile, setRefineCaseFile] = useState<File | null>(null);
   const [coverageCaseFile, setCoverageCaseFile] = useState<File | null>(null);
+  const [coverageExportMode, setCoverageExportMode] = useState<"suggested-only" | "merge-with-existing">("suggested-only");
   const update = (key: keyof RequirementInput, value: string) => setRequirement({ ...requirement, [key]: value });
   const canGenerate = Boolean(requirement.acceptanceCriteria.trim());
   const setCount = (value: string) => setConfig({ ...config, maxCases: value === "Auto" ? 250 : Number(value) });
@@ -727,7 +769,16 @@ function GenerateTab(props: {
             <small>XLSX, XLS</small>
             <input type="file" accept=".xlsx,.xls" onChange={(e) => setCoverageCaseFile(e.target.files?.[0] ?? null)} />
           </label>
-          {coverageReview && <CoverageReviewPanel review={coverageReview} />}
+          {coverageReview && (
+            <CoverageReviewPanel
+              review={coverageReview}
+              exportMode={coverageExportMode}
+              setExportMode={setCoverageExportMode}
+              onOpenSuggestions={openCoverageSuggestionsForReview}
+              onExport={() => coverageCaseFile && exportCoverageReviewExcel(coverageCaseFile, coverageExportMode)}
+              busy={busy}
+            />
+          )}
         </section>
       )}
 
@@ -744,7 +795,16 @@ function GenerateTab(props: {
   );
 }
 
-function CoverageReviewPanel({ review }: { review: CoverageReviewResult }) {
+function CoverageReviewPanel({ review, exportMode, setExportMode, onOpenSuggestions, onExport, busy }: {
+  review: CoverageReviewResult;
+  exportMode: "suggested-only" | "merge-with-existing";
+  setExportMode: (mode: "suggested-only" | "merge-with-existing") => void;
+  onOpenSuggestions: () => void;
+  onExport: () => void;
+  busy: string;
+}) {
+  const reviewComments = review.items.flatMap((item) => item.reviewComments.map((comment) => ({ ...comment, acId: item.acId, status: item.status, score: item.score })));
+  const actionableComments = reviewComments.filter((comment) => comment.status !== "Covered");
   return (
     <div className="coverage-review">
       <div className="metrics compact-metrics">
@@ -756,6 +816,28 @@ function CoverageReviewPanel({ review }: { review: CoverageReviewResult }) {
         <Metric label="Suggested Cases" value={review.summary.suggestedMissingCases} />
       </div>
       {review.warnings.map((warning) => <Notice key={warning} type="info" text={warning} />)}
+      <div className="review-list">
+        <div className="section-title">
+          <div>
+            <h2>Coverage Review Comments</h2>
+            <p className="muted">Review these gaps before generating or exporting new test cases.</p>
+          </div>
+        </div>
+        <div className="review-comment-list">
+          {(actionableComments.length ? actionableComments : reviewComments).map((comment) => (
+            <article className={`review-comment ${comment.severity.toLowerCase()}`} key={`${comment.acId}-${comment.title}`}>
+              <div className="coverage-line">
+                <strong>{comment.acId}</strong>
+                <span>{comment.severity}</span>
+                <small>{comment.score}% match</small>
+              </div>
+              <h3>{comment.title}</h3>
+              <p>{comment.comment}</p>
+              <p className="muted"><strong>Suggested action:</strong> {comment.suggestedAction}</p>
+            </article>
+          ))}
+        </div>
+      </div>
       <div className="review-grid">
         <div className="review-list">
           <h2>Acceptance Criteria Coverage</h2>
@@ -781,6 +863,22 @@ function CoverageReviewPanel({ review }: { review: CoverageReviewResult }) {
       </div>
       <div className="review-list">
         <h2>Suggested Missing Test Cases</h2>
+        {review.suggestedTestCases.length > 0 && (
+          <section className="export-choice-panel">
+            <div>
+              <h3>After reviewing gaps</h3>
+              <p className="muted">Choose how the Excel download should be prepared.</p>
+            </div>
+            <div className="segmented">
+              <button className={exportMode === "suggested-only" ? "active" : ""} onClick={() => setExportMode("suggested-only")}>Suggested only</button>
+              <button className={exportMode === "merge-with-existing" ? "active" : ""} onClick={() => setExportMode("merge-with-existing")}>Merge with existing</button>
+            </div>
+            <div className="actions">
+              <button onClick={onOpenSuggestions}><Search size={16} />Generate Missing Test Cases</button>
+              <button className="primary" onClick={onExport} disabled={Boolean(busy)}><FileSpreadsheet size={16} />Download Excel</button>
+            </div>
+          </section>
+        )}
         {review.suggestedTestCases.length ? (
           <div className="table-wrap">
             <table>
