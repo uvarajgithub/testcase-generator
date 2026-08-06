@@ -427,25 +427,16 @@ function GenerateTab(props: {
   const screenshotText = screenshots.length ? `${screenshots.length} added` : "Not added";
   const uniqueBehaviors = visionSummary?.uniqueCoverageBehaviours ?? (detectedElements.length || "--");
   const estimatedCases = visionSummary?.plannedTestCases ?? (config.maxCases === 250 ? "--" : config.maxCases);
+  const disabledReason = !canGenerate ? "Add acceptance criteria to enable generation." : !config.detailLevel ? "Select a coverage level to continue." : "";
+  const saveDraft = () => window.localStorage.setItem("testcraft-generate-draft", JSON.stringify({ requirement, requirementFiles, screenshots, config }));
+  const coverageLevels = [
+    { label: "Basic", value: "Concise", detail: "Explicit acceptance criteria only", includes: ["Positive", "Negative", "Validation"] },
+    { label: "Standard", value: "Standard", detail: "Positive, negative, validation, edge, permission", includes: ["Positive", "Negative", "Validation", "Edge", "Permission", "Integration"] },
+    { label: "Comprehensive", value: "Detailed", detail: "Standard plus security, integration, accessibility and more", includes: ["Positive", "Negative", "Validation", "Edge", "Security", "Accessibility"] }
+  ] as const;
 
   return (
     <article className={workMode === "Generate New" ? "generate-workspace" : "primary-card"}>
-      <div className="workspace-modebar">
-        <section className="mode-selector" role="radiogroup" aria-label="Test case workflow">
-          {([
-            { name: "Generate New", detail: "Acceptance criteria with optional screenshots" },
-            { name: "Refine Existing", detail: "Clean an uploaded test-case workbook" },
-            { name: "Review Coverage", detail: "Compare acceptance criteria with existing tests" }
-          ] as const).map((mode) => (
-            <button key={mode.name} className={workMode === mode.name ? "mode-card active" : "mode-card"} onClick={() => setWorkMode(mode.name)} role="radio" aria-checked={workMode === mode.name}>
-              <strong>{mode.name}</strong>
-              <span>{mode.detail}</span>
-            </button>
-          ))}
-        </section>
-        <button onClick={resetWorkspace}><RefreshCw size={16} />Reset page</button>
-      </div>
-
       {workMode === "Generate New" && (
         <div className="generate-layout">
           <div className="generate-main">
@@ -525,9 +516,10 @@ function GenerateTab(props: {
                     {shot.dataUrl ? <img src={shot.dataUrl} alt={`Preview of ${shot.filename}`} /> : <div className="image-fallback">Preview unavailable</div>}
                     <div>
                       <strong>{shot.filename}</strong>
-                      <span>{Math.round(shot.size / 1024)} KB</span>
+                      <span>{reports.find((report) => report.screenshotId === shot.id)?.status ?? "Uploaded"} · {reports.find((report) => report.screenshotId === shot.id)?.mode ?? "Pending analysis"} · {reports.find((report) => report.screenshotId === shot.id)?.confidence ?? "--"}%</span>
                     </div>
                     <div className="row-actions">
+                      <button onClick={analyseUploadedScreenshots} disabled={Boolean(busy)}><Search size={16} />Review Findings</button>
                       <label className="tiny-file">Replace<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => void uploadScreenshots(e.target.files)} /></label>
                       <button onClick={() => setScreenshots(screenshots.filter((item) => item.id !== shot.id))}><Trash2 size={16} />Remove</button>
                     </div>
@@ -553,33 +545,54 @@ function GenerateTab(props: {
                 <span>3</span>
                 <div><h2>Configure Coverage</h2><p className="muted">Choose coverage level and additional options for test generation.</p></div>
               </div>
-              <div className="generation-row">
-                <div className="control-panel test-types-panel">
-                  <h2>Included coverage</h2>
-                  <div className="option-grid compact">
-                    {testTypes.map((type) => (
-                      <label className="check" key={type}>
-                        <input type="checkbox" checked={config.selectedTypes.includes(type)} onChange={() => toggleType(type, config, setConfig)} />
-                        {type}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-                <div className="control-panel">
-                  <Field label="Count"><select value={config.maxCases === 250 ? "Auto" : String(config.maxCases)} onChange={(e) => setCount(e.target.value)}>{["Auto", "10", "20", "30", "50"].map((item) => <option key={item}>{item}</option>)}</select></Field>
-                </div>
-                <div className="control-panel">
-                  <Field label="Coverage Level"><select value={config.detailLevel} onChange={(e) => setConfig({ ...config, detailLevel: e.target.value as GenerationConfig["detailLevel"] })}><option>Concise</option><option>Standard</option><option>Detailed</option></select></Field>
-                  <div className="compact-toggles">
-                    <label><input type="checkbox" checked={config.includeTestData} onChange={(e) => setConfig({ ...config, includeTestData: e.target.checked })} />Test data</label>
-                    <label><input type="checkbox" checked={Boolean(requirement.preconditions || config.includePostconditions)} onChange={(e) => setConfig({ ...config, includePostconditions: e.target.checked })} />Preconditions</label>
-                    <label><input type="checkbox" checked={config.includeAutomationCandidates} onChange={(e) => setConfig({ ...config, includeAutomationCandidates: e.target.checked })} />Automation</label>
-                    <label><input type="checkbox" defaultChecked />Group by AC</label>
-                  </div>
-                </div>
+              <div className="coverage-level-grid">
+                {coverageLevels.map((level) => (
+                  <button
+                    key={level.label}
+                    className={config.detailLevel === level.value ? "coverage-level active" : "coverage-level"}
+                    onClick={() => setConfig({ ...config, detailLevel: level.value as GenerationConfig["detailLevel"] })}
+                  >
+                    <strong>{level.label}</strong>
+                    <span>{level.detail}</span>
+                    <small>{level.includes.map((item) => <b key={item}>{item}</b>)}</small>
+                  </button>
+                ))}
               </div>
+              <details className="advanced-options">
+                <summary>Show advanced options</summary>
+                <div className="generation-row">
+                  <div className="control-panel test-types-panel">
+                    <h2>Included coverage</h2>
+                    <div className="option-grid compact">
+                      {testTypes.map((type) => (
+                        <label className="check" key={type}>
+                          <input type="checkbox" checked={config.selectedTypes.includes(type)} onChange={() => toggleType(type, config, setConfig)} />
+                          {type}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="control-panel">
+                    <Field label="Count"><select value={config.maxCases === 250 ? "Auto" : String(config.maxCases)} onChange={(e) => setCount(e.target.value)}>{["Auto", "10", "20", "30", "50"].map((item) => <option key={item}>{item}</option>)}</select></Field>
+                  </div>
+                  <div className="control-panel">
+                    <div className="compact-toggles">
+                      <label><input type="checkbox" checked={config.includeTestData} onChange={(e) => setConfig({ ...config, includeTestData: e.target.checked })} />Test data</label>
+                      <label><input type="checkbox" checked={Boolean(requirement.preconditions || config.includePostconditions)} onChange={(e) => setConfig({ ...config, includePostconditions: e.target.checked })} />Preconditions</label>
+                      <label><input type="checkbox" checked={config.includeAutomationCandidates} onChange={(e) => setConfig({ ...config, includeAutomationCandidates: e.target.checked })} />Automation</label>
+                      <label><input type="checkbox" defaultChecked />Group by AC</label>
+                    </div>
+                  </div>
+                </div>
+              </details>
             </section>
             {busy && <ProgressList items={progress} />}
+            <details className="other-workflows">
+              <summary>Other workflows</summary>
+              <div className="segmented">
+                {(["Generate New", "Refine Existing", "Review Coverage"] as const).map((mode) => <button key={mode} className={workMode === mode ? "active" : ""} onClick={() => setWorkMode(mode)}>{mode}</button>)}
+              </div>
+            </details>
           </div>
 
           <aside className="generation-summary">
@@ -595,12 +608,26 @@ function GenerateTab(props: {
               <small>Generation Mode</small>
               <strong>{visionSummary?.generationMode ?? "Gemini Vision-assisted"}</strong>
             </div>
-            <Notice type="info" text="Acceptance criteria remain the primary source. Screenshots improve screen names, controls, fields, and navigation when reliable." />
+            <details className="how-it-works">
+              <summary>How it works</summary>
+              <p>Acceptance criteria remain primary. Reliable screenshot findings improve names, controls, fields, and navigation.</p>
+            </details>
+            {disabledReason && <p className="disabled-reason">{disabledReason}</p>}
             <button className="primary big generate-button" onClick={generate} disabled={!canGenerate || Boolean(busy)}>
               <RefreshCw size={18} />{busy ? "Generating Test Cases..." : "Generate Test Cases"}
             </button>
+            <button onClick={saveDraft}>Save Draft</button>
             <button onClick={resetWorkspace}>Reset Page</button>
           </aside>
+        </div>
+      )}
+
+      {workMode !== "Generate New" && (
+        <div className="compact-workflow-strip">
+          <div className="segmented">
+            {(["Generate New", "Refine Existing", "Review Coverage"] as const).map((mode) => <button key={mode} className={workMode === mode ? "active" : ""} onClick={() => setWorkMode(mode)}>{mode}</button>)}
+          </div>
+          <button onClick={resetWorkspace}><RefreshCw size={16} />Reset Page</button>
         </div>
       )}
 

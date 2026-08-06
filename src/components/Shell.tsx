@@ -1,9 +1,7 @@
 import {
   Archive,
   BarChart3,
-  Bell,
   ChevronDown,
-  CircleHelp,
   ClipboardCheck,
   FilePenLine,
   FlaskConical,
@@ -28,7 +26,7 @@ const pageCopy: Record<string, { title: string; subtitle: string }> = {
   },
   Generate: {
     title: "Generate Test Cases",
-    subtitle: "Create high-quality test cases from requirements and screenshots in minutes."
+    subtitle: "Create high-quality test cases from requirements and screenshots."
   },
   "Review Test Cases": {
     title: "Review Test Cases",
@@ -75,7 +73,7 @@ export function Shell({
     <div className="app-shell">
       <aside className="app-sidebar" aria-label="Primary navigation">
         <div className="brand-lockup">
-          <div className="logo-mark"><FlaskConical size={28} aria-hidden /></div>
+          <div className="logo-mark"><FlaskConical size={34} aria-hidden /></div>
           <div>
             <strong>TestCraft AI</strong>
             <span>AI Test Case Generator</span>
@@ -126,9 +124,6 @@ export function Shell({
               <span>Gemini Vision</span>
               <strong><i className={geminiReady ? "status-dot ready" : "status-dot warn"} />{geminiReady ? "Connected" : "Unavailable"}</strong>
             </div>
-            <button className="icon-button" aria-label="Help"><CircleHelp size={20} /></button>
-            <button className="icon-button notification-button" aria-label="Notifications"><Bell size={20} /></button>
-            <button className="avatar-button" type="button">AA <ChevronDown size={15} aria-hidden /></button>
           </div>
         </header>
         <main>{children}</main>
