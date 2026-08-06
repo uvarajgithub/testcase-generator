@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Shell } from "./components/Shell";
 import { Field } from "./components/Field";
 import { api, type CoverageReviewResult, type ScreenshotAnalysisReport, type VisionSummary } from "./lib/api";
-import { calculateCoverage, inferRequirementModel, isDocumentHeading, normalizeRequirementText } from "./lib/analysis";
+import { calculateCoverage, inferRequirementModel, isDocumentHeading, normalizeRequirementText, parseAcceptanceCriteria } from "./lib/analysis";
 import { azureCaseRows, validateAzureTestCases } from "./lib/format";
 import { generationConfigSchema, priorities, testTypes, type CoverageSummary, type Generation, type GenerationConfig, type RequirementInput, type TestCase } from "./lib/schemas";
 
@@ -265,7 +265,7 @@ export function App() {
     }
   }
 
-  async function exportCoverageReviewExcel(file: File, mode: "suggested-only" | "merge-with-existing") {
+  async function exportCoverageReviewExcel(_file: File, mode: "suggested-only" | "merge-with-existing") {
     if (!coverageReview || !requirement.acceptanceCriteria.trim()) {
       setError("Review coverage first, then download the missing coverage Excel.");
       return;
@@ -278,7 +278,36 @@ export function App() {
       "Starting workbook download"
     ]);
     try {
-      const filename = await api.exportCoverageReviewExcel(withDefaults(requirement, requirementFiles), file, mode);
+      const prepared = withDefaults(requirement, requirementFiles);
+      const now = new Date().toISOString();
+      const exportGeneration: Generation = {
+        id: `COV-${Date.now().toString().slice(-8)}`,
+        requirement: {
+          ...prepared,
+          moduleName: prepared.moduleName || "Coverage Review",
+          featureName: prepared.featureName || "Missing coverage suggestions"
+        },
+        criteria: parseAcceptanceCriteria(prepared.acceptanceCriteria),
+        screenshots: [],
+        detectedElements: [],
+        config,
+        testCases: mode === "merge-with-existing"
+          ? [...coverageReview.existingTestCases, ...coverageReview.suggestedTestCases]
+          : coverageReview.suggestedTestCases,
+        assumptions: [
+          "Generated from Review Coverage after comparing uploaded existing test cases with acceptance criteria.",
+          mode === "merge-with-existing" ? "Workbook includes refined existing test cases plus suggested missing coverage." : "Workbook includes suggested missing coverage only."
+        ],
+        ambiguities: [],
+        warnings: coverageReview.warnings,
+        createdAt: now,
+        updatedAt: now,
+        exportHistory: []
+      };
+      const filename = await api.exportExcel(exportGeneration, {
+        ...azureConfig,
+        areaPath: azureConfig.areaPath || `${exportGeneration.requirement.projectName}\\${exportGeneration.requirement.moduleName}`
+      });
       setMessage(`Downloaded ${filename}.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Coverage review Excel export failed.");

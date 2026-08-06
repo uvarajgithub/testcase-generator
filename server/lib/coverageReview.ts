@@ -38,6 +38,7 @@ export type CoverageReviewResult = {
   items: CoverageReviewItem[];
   duplicateTitles: string[];
   weakCases: Array<{ title: string; issue: string }>;
+  existingTestCases: TestCase[];
   suggestedTestCases: TestCase[];
   warnings: string[];
 };
@@ -119,6 +120,7 @@ export async function analyseExistingCoverage(input: ArrayBuffer | Uint8Array, r
     items: reviewItems,
     duplicateTitles,
     weakCases,
+    existingTestCases: existingGeneration.testCases,
     suggestedTestCases,
     warnings: [
       "Coverage review compares uploaded test-case intent against acceptance criteria. Review partial matches before adding suggested cases.",

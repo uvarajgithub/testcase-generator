@@ -67,6 +67,7 @@ export type CoverageReviewResult = {
   }>;
   duplicateTitles: string[];
   weakCases: Array<{ title: string; issue: string }>;
+  existingTestCases: TestCase[];
   suggestedTestCases: TestCase[];
   warnings: string[];
 };
@@ -130,12 +131,21 @@ export const api = {
     return filename;
   },
   refineExistingExcel: async (file: File) => {
-    const form = new FormData();
-    form.append("workbook", file);
-    const response = await fetch("/api/refine-existing-excel", { method: "POST", body: form });
+    const upload = () => {
+      const form = new FormData();
+      form.append("workbook", file);
+      return fetch("/api/refine-existing-excel", { method: "POST", body: form });
+    };
+    let response = await upload();
+    if (!response.ok && response.status >= 500) response = await upload();
     if (!response.ok) {
-      const body = await response.json().catch(() => null) as ApiResponse<unknown> | null;
-      throw new Error(body && !body.ok ? body.error.message : "Existing test-case refinement failed.");
+      const contentType = response.headers.get("content-type") ?? "";
+      if (contentType.includes("json")) {
+        const body = await response.json().catch(() => null) as ApiResponse<unknown> | null;
+        throw new Error(body && !body.ok ? body.error.message : `Existing test-case refinement failed with status ${response.status}.`);
+      }
+      const text = (await response.text().catch(() => "")).trim();
+      throw new Error(text ? `Existing test-case refinement failed (${response.status}): ${text}` : `Existing test-case refinement failed with status ${response.status}.`);
     }
     const blob = await response.blob();
     const disposition = response.headers.get("content-disposition") ?? "";
