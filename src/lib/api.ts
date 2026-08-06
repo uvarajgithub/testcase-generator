@@ -166,8 +166,13 @@ export const api = {
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
     link.download = filename;
+    link.style.display = "none";
+    document.body.appendChild(link);
     link.click();
-    URL.revokeObjectURL(link.href);
+    setTimeout(() => {
+      URL.revokeObjectURL(link.href);
+      link.remove();
+    }, 1000);
     return filename;
   },
   openHtml: async (generationId: string) => {

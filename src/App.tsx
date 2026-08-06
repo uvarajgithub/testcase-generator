@@ -1,9 +1,9 @@
-import { AlertCircle, BarChart3, Check, ClipboardCheck, Copy, Edit3, ExternalLink, FilePenLine, FileSpreadsheet, FileText, Filter, Image, Plus, RefreshCw, Save, Search, ShieldCheck, Trash2, UploadCloud } from "lucide-react";
+import { AlertCircle, BarChart3, Check, ClipboardCheck, Copy, Edit3, ExternalLink, FilePenLine, FileSpreadsheet, FileText, Filter, Image, Loader2, Plus, RefreshCw, Save, Search, ShieldCheck, Trash2, UploadCloud } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Shell } from "./components/Shell";
 import { Field } from "./components/Field";
 import { api, type CoverageReviewResult, type ScreenshotAnalysisReport, type VisionSummary } from "./lib/api";
-import { calculateCoverage, inferRequirementModel, isDocumentHeading, normalizeRequirementText, parseAcceptanceCriteria } from "./lib/analysis";
+import { calculateCoverage, inferRequirementModel, isDocumentHeading, normalizeRequirementText } from "./lib/analysis";
 import { azureCaseRows, validateAzureTestCases } from "./lib/format";
 import { generationConfigSchema, priorities, testTypes, type CoverageSummary, type Generation, type GenerationConfig, type RequirementInput, type TestCase } from "./lib/schemas";
 
@@ -266,9 +266,17 @@ export function App() {
   }
 
   async function exportCoverageReviewExcel(file: File, mode: "suggested-only" | "merge-with-existing") {
-    if (!coverageReview || !requirement.acceptanceCriteria.trim()) return;
-    setBusy("Exporting coverage review");
+    if (!coverageReview || !requirement.acceptanceCriteria.trim()) {
+      setError("Review coverage first, then download the missing coverage Excel.");
+      return;
+    }
+    setBusy(mode === "merge-with-existing" ? "Preparing merged coverage Excel" : "Preparing missing coverage Excel");
     setError("");
+    setProgress([
+      mode === "merge-with-existing" ? "Combining existing test cases with missing suggestions" : "Preparing suggested missing test cases",
+      "Applying Azure DevOps Excel column format",
+      "Starting workbook download"
+    ]);
     try {
       const filename = await api.exportCoverageReviewExcel(withDefaults(requirement, requirementFiles), file, mode);
       setMessage(`Downloaded ${filename}.`);
@@ -277,29 +285,6 @@ export function App() {
     } finally {
       setBusy("");
     }
-  }
-
-  async function openCoverageSuggestionsForReview() {
-    if (!coverageReview?.suggestedTestCases.length) return;
-    const prepared = withDefaults(requirement, requirementFiles);
-    const now = new Date().toISOString();
-    const draft: Generation = {
-      id: `COV-${Date.now().toString().slice(-8)}`,
-      requirement: prepared,
-      criteria: parseAcceptanceCriteria(prepared.acceptanceCriteria),
-      screenshots: [],
-      detectedElements: [],
-      config,
-      testCases: coverageReview.suggestedTestCases,
-      assumptions: ["Created from Review Coverage missing-gap suggestions."],
-      ambiguities: [],
-      warnings: coverageReview.warnings,
-      createdAt: now,
-      updatedAt: now,
-      exportHistory: []
-    };
-    await saveGeneration(draft, "Suggested missing coverage cases opened for review.");
-    setActive("Review Test Cases");
   }
 
   async function saveGeneration(next: Generation, toast = "Draft saved.") {
@@ -354,6 +339,7 @@ export function App() {
   return (
     <Shell active={active} setActive={setActive} health={health} titleOverride={active === "Generate" ? workflowCopy[testCaseWorkflow].title : undefined} subtitleOverride={active === "Generate" ? workflowCopy[testCaseWorkflow].subtitle : undefined}>
       {message && <div className="toast" role="status">{message}</div>}
+      {busy && <BusyOverlay label={busy} items={progress} />}
       <section className={`page ${["Review Test Cases", "Coverage", "Export History"].includes(active) ? "page-wide" : ""}`}>
         {error && <Notice type="error" text={error} />}
         {active === "Dashboard" && (
@@ -385,7 +371,6 @@ export function App() {
             refineExistingExcel={refineExistingExcel}
             reviewExistingCoverage={reviewExistingCoverage}
             exportCoverageReviewExcel={exportCoverageReviewExcel}
-            openCoverageSuggestionsForReview={openCoverageSuggestionsForReview}
             coverageReview={coverageReview}
             resetWorkspace={resetWorkspace}
             busy={busy}
@@ -471,13 +456,12 @@ function GenerateTab(props: {
   refineExistingExcel: (file: File) => void;
   reviewExistingCoverage: (file: File) => void;
   exportCoverageReviewExcel: (file: File, mode: "suggested-only" | "merge-with-existing") => void;
-  openCoverageSuggestionsForReview: () => void;
   coverageReview: CoverageReviewResult | null;
   resetWorkspace: () => void;
   busy: string;
   progress: string[];
 }) {
-  const { workMode, setWorkMode, requirement, setRequirement, requirementFiles, setRequirementFiles, uploadRequirementFiles, screenshots, setScreenshots, uploadScreenshots, analyseUploadedScreenshots, detectedElements, setDetectedElements, visionSummary, reports, ignoreScreenshotData, setIgnoreScreenshotData, config, setConfig, generate, refineExistingExcel, reviewExistingCoverage, exportCoverageReviewExcel, openCoverageSuggestionsForReview, coverageReview, resetWorkspace, busy, progress } = props;
+  const { workMode, setWorkMode, requirement, setRequirement, requirementFiles, setRequirementFiles, uploadRequirementFiles, screenshots, setScreenshots, uploadScreenshots, analyseUploadedScreenshots, detectedElements, setDetectedElements, visionSummary, reports, ignoreScreenshotData, setIgnoreScreenshotData, config, setConfig, generate, refineExistingExcel, reviewExistingCoverage, exportCoverageReviewExcel, coverageReview, resetWorkspace, busy, progress } = props;
   const [sourceMode, setSourceMode] = useState<"Manual Entry" | "Upload Requirement">("Manual Entry");
   const [refineCaseFile, setRefineCaseFile] = useState<File | null>(null);
   const [coverageCaseFile, setCoverageCaseFile] = useState<File | null>(null);
@@ -774,8 +758,7 @@ function GenerateTab(props: {
               review={coverageReview}
               exportMode={coverageExportMode}
               setExportMode={setCoverageExportMode}
-              onOpenSuggestions={openCoverageSuggestionsForReview}
-              onExport={() => coverageCaseFile && exportCoverageReviewExcel(coverageCaseFile, coverageExportMode)}
+              onExport={(mode) => coverageCaseFile && exportCoverageReviewExcel(coverageCaseFile, mode)}
               busy={busy}
             />
           )}
@@ -795,12 +778,11 @@ function GenerateTab(props: {
   );
 }
 
-function CoverageReviewPanel({ review, exportMode, setExportMode, onOpenSuggestions, onExport, busy }: {
+function CoverageReviewPanel({ review, exportMode, setExportMode, onExport, busy }: {
   review: CoverageReviewResult;
   exportMode: "suggested-only" | "merge-with-existing";
   setExportMode: (mode: "suggested-only" | "merge-with-existing") => void;
-  onOpenSuggestions: () => void;
-  onExport: () => void;
+  onExport: (mode: "suggested-only" | "merge-with-existing") => void;
   busy: string;
 }) {
   const reviewComments = review.items.flatMap((item) => item.reviewComments.map((comment) => ({ ...comment, acId: item.acId, status: item.status, score: item.score })));
@@ -866,16 +848,16 @@ function CoverageReviewPanel({ review, exportMode, setExportMode, onOpenSuggesti
         {review.suggestedTestCases.length > 0 && (
           <section className="export-choice-panel">
             <div>
-              <h3>After reviewing gaps</h3>
-              <p className="muted">Choose how the Excel download should be prepared.</p>
+              <h3>Download reviewed coverage output</h3>
+              <p className="muted">Stay on this page and download the Excel file that matches your review decision.</p>
             </div>
             <div className="segmented">
-              <button className={exportMode === "suggested-only" ? "active" : ""} onClick={() => setExportMode("suggested-only")}>Suggested only</button>
-              <button className={exportMode === "merge-with-existing" ? "active" : ""} onClick={() => setExportMode("merge-with-existing")}>Merge with existing</button>
+              <button className={exportMode === "suggested-only" ? "active" : ""} onClick={() => setExportMode("suggested-only")} disabled={Boolean(busy)}>Missing test cases only</button>
+              <button className={exportMode === "merge-with-existing" ? "active" : ""} onClick={() => setExportMode("merge-with-existing")} disabled={Boolean(busy)}>Existing plus missing</button>
             </div>
             <div className="actions">
-              <button onClick={onOpenSuggestions}><Search size={16} />Generate Missing Test Cases</button>
-              <button className="primary" onClick={onExport} disabled={Boolean(busy)}><FileSpreadsheet size={16} />Download Excel</button>
+              <button onClick={() => onExport("suggested-only")} disabled={Boolean(busy)}><FileSpreadsheet size={16} />Download Missing Cases Excel</button>
+              <button className="primary" onClick={() => onExport("merge-with-existing")} disabled={Boolean(busy)}><FileSpreadsheet size={16} />Download Existing + Missing Excel</button>
             </div>
           </section>
         )}
@@ -1189,6 +1171,21 @@ function FileList({ files, remove }: { files: ReqFile[]; remove: (name: string) 
 
 function ProgressList({ items }: { items: string[] }) {
   return <div className="progress-list">{items.map((item) => <span key={item}><Check size={15} />{item}</span>)}</div>;
+}
+
+function BusyOverlay({ label, items }: { label: string; items: string[] }) {
+  return (
+    <div className="busy-overlay" role="status" aria-live="polite" aria-busy="true">
+      <div className="busy-card">
+        <Loader2 size={28} className="spin" />
+        <div>
+          <h2>{label}</h2>
+          <p className="muted">Please wait while TestCraft AI completes this action.</p>
+        </div>
+        {items.length > 0 && <ProgressList items={items} />}
+      </div>
+    </div>
+  );
 }
 
 function Notice({ type, text }: { type: "info" | "warn" | "error"; text: string }) {
