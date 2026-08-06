@@ -1,7 +1,9 @@
 import {
   Archive,
   BarChart3,
+  Bell,
   ChevronDown,
+  CircleHelp,
   ClipboardCheck,
   FilePenLine,
   FlaskConical,
@@ -124,6 +126,9 @@ export function Shell({
               <span>Gemini Vision</span>
               <strong><i className={geminiReady ? "status-dot ready" : "status-dot warn"} />{geminiReady ? "Connected" : "Unavailable"}</strong>
             </div>
+            <button className="icon-button" aria-label="Help"><CircleHelp size={20} /></button>
+            <button className="icon-button notification-button" aria-label="Notifications"><Bell size={20} /></button>
+            <button className="avatar-button" type="button">AA <ChevronDown size={15} aria-hidden /></button>
           </div>
         </header>
         <main>{children}</main>

@@ -1,4 +1,4 @@
-import { AlertCircle, BarChart3, Check, ClipboardCheck, Copy, Edit3, ExternalLink, FilePenLine, FileSpreadsheet, Filter, Plus, RefreshCw, Save, Search, Trash2, UploadCloud } from "lucide-react";
+import { AlertCircle, BarChart3, Check, ClipboardCheck, Copy, Edit3, ExternalLink, FilePenLine, FileSpreadsheet, FileText, Filter, Image, Plus, RefreshCw, Save, Search, ShieldCheck, Trash2, UploadCloud } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Shell } from "./components/Shell";
 import { Field } from "./components/Field";
@@ -430,10 +430,11 @@ function GenerateTab(props: {
   const disabledReason = !canGenerate ? "Add acceptance criteria to enable generation." : !config.detailLevel ? "Select a coverage level to continue." : "";
   const saveDraft = () => window.localStorage.setItem("testcraft-generate-draft", JSON.stringify({ requirement, requirementFiles, screenshots, config }));
   const coverageLevels = [
-    { label: "Basic", value: "Concise", detail: "Explicit acceptance criteria only", includes: ["Positive", "Negative", "Validation"] },
-    { label: "Standard", value: "Standard", detail: "Positive, negative, validation, edge, permission", includes: ["Positive", "Negative", "Validation", "Edge", "Permission", "Integration"] },
-    { label: "Comprehensive", value: "Detailed", detail: "Standard plus security, integration, accessibility and more", includes: ["Positive", "Negative", "Validation", "Edge", "Security", "Accessibility"] }
+    { label: "Standard", value: "Standard", detail: "Positive, negative, validation, edge, state & permission" },
+    { label: "Basic", value: "Concise", detail: "Explicit acceptance criteria only" },
+    { label: "Comprehensive", value: "Detailed", detail: "All standard + security, integration, accessibility and more" }
   ] as const;
+  const standardIncluded = ["Positive", "Negative", "Validation", "Edge Cases", "State Transition", "Permission", "Integration", "UI", "Responsive"];
 
   return (
     <article className={workMode === "Generate New" ? "generate-workspace" : "primary-card"}>
@@ -456,8 +457,8 @@ function GenerateTab(props: {
             <section className="workspace-card">
               <div className="source-row">
                 <div className="numbered-title">
-                  <span>1</span>
-                  <div><h2>Add Requirements</h2><p className="muted">Paste acceptance criteria, user story, or functional requirements.</p></div>
+                  <span><FileText size={20} /></span>
+                  <div><h2>1. Add Requirements</h2><p className="muted">Paste acceptance criteria, user story, or functional requirements.</p></div>
                 </div>
                 <div className="segmented">
                   {(["Manual Entry", "Upload Requirement"] as const).map((item) => <button key={item} className={sourceMode === item ? "active" : ""} onClick={() => setSourceMode(item)}>{item === "Manual Entry" ? "Paste Text" : "Upload Document"}</button>)}
@@ -499,10 +500,16 @@ function GenerateTab(props: {
             <section className="workspace-card compact-upload-section">
               <div className="source-row">
                 <div className="numbered-title">
-                  <span>2</span>
-                  <div><h2>Add Screenshots</h2><p className="muted">Upload application screens, requirement docs, or mockups.</p></div>
+                  <span><Image size={20} /></span>
+                  <div><h2>2. Add Screenshots</h2><p className="muted">Upload application screens, requirement docs, or mockups.</p></div>
                 </div>
-                <span className="badge">Optional</span>
+                <div className="screenshot-title-actions">
+                  <span className="badge">Optional</span>
+                  <label className="upload-inline-button">
+                    <UploadCloud size={17} />Upload Screenshots
+                    <input type="file" multiple accept="image/png,image/jpeg,image/webp" onChange={(e) => void uploadScreenshots(e.target.files)} />
+                  </label>
+                </div>
               </div>
               <label className="dropzone">
                 <UploadCloud size={28} />
@@ -542,21 +549,31 @@ function GenerateTab(props: {
 
             <section className="workspace-card">
               <div className="numbered-title">
-                <span>3</span>
-                <div><h2>Configure Coverage</h2><p className="muted">Choose coverage level and additional options for test generation.</p></div>
+                <span><ShieldCheck size={21} /></span>
+                <div><h2>3. Configure Coverage</h2><p className="muted">Choose coverage level and additional options for test generation.</p></div>
               </div>
-              <div className="coverage-level-grid">
-                {coverageLevels.map((level) => (
-                  <button
-                    key={level.label}
-                    className={config.detailLevel === level.value ? "coverage-level active" : "coverage-level"}
-                    onClick={() => setConfig({ ...config, detailLevel: level.value as GenerationConfig["detailLevel"] })}
-                  >
-                    <strong>{level.label}</strong>
-                    <span>{level.detail}</span>
-                    <small>{level.includes.map((item) => <b key={item}>{item}</b>)}</small>
-                  </button>
-                ))}
+              <div className="coverage-config-grid">
+                <div>
+                  <h3>Coverage Level</h3>
+                  <div className="coverage-level-grid">
+                    {coverageLevels.map((level) => (
+                      <button
+                        key={level.label}
+                        className={config.detailLevel === level.value ? "coverage-level active" : "coverage-level"}
+                        onClick={() => setConfig({ ...config, detailLevel: level.value as GenerationConfig["detailLevel"] })}
+                      >
+                        <strong>{level.label}</strong>
+                        <span>{level.detail}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <h3>Included in Standard</h3>
+                  <div className="included-standard-grid">
+                    {standardIncluded.map((item) => <span key={item}><Check size={14} />{item}</span>)}
+                  </div>
+                </div>
               </div>
               <details className="advanced-options">
                 <summary>Show advanced options</summary>
@@ -587,12 +604,6 @@ function GenerateTab(props: {
               </details>
             </section>
             {busy && <ProgressList items={progress} />}
-            <details className="other-workflows">
-              <summary>Other workflows</summary>
-              <div className="segmented">
-                {(["Generate New", "Refine Existing", "Review Coverage"] as const).map((mode) => <button key={mode} className={workMode === mode ? "active" : ""} onClick={() => setWorkMode(mode)}>{mode}</button>)}
-              </div>
-            </details>
           </div>
 
           <aside className="generation-summary">
@@ -608,10 +619,10 @@ function GenerateTab(props: {
               <small>Generation Mode</small>
               <strong>{visionSummary?.generationMode ?? "Gemini Vision-assisted"}</strong>
             </div>
-            <details className="how-it-works">
-              <summary>How it works</summary>
-              <p>Acceptance criteria remain primary. Reliable screenshot findings improve names, controls, fields, and navigation.</p>
-            </details>
+            <section className="summary-help-card">
+              <strong>How it works</strong>
+              <p>We analyze your requirements and screenshots to identify unique behaviors and generate detailed test cases.</p>
+            </section>
             {disabledReason && <p className="disabled-reason">{disabledReason}</p>}
             <button className="primary big generate-button" onClick={generate} disabled={!canGenerate || Boolean(busy)}>
               <RefreshCw size={18} />{busy ? "Generating Test Cases..." : "Generate Test Cases"}
